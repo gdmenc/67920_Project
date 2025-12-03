@@ -61,8 +61,12 @@ apptainer shell --nv containers/gfootball.sif
 Training requires GPU resources. First allocate a GPU node:
 
 ```bash
-# Request GPU allocation (adjust partition/time as needed)
+# Request GPU allocation (adjust partition/time as needed; example: 1 GPU)
 salloc -p mit_normal_gpu --gpus=1 -t 360 --mem=64G -c 16
+
+# Request specific GPU type (e.g., A100)
+salloc -p mit_preemptable --gres=gpu:a100:1 -t 720 --mem=320G -c 128
+
 ```
 
 Then run training:
@@ -90,6 +94,20 @@ salloc -p mit_normal_gpu --gpus=2 -t 360 --mem=128G -c 32
 ```bash
 salloc -p mit_normal_gpu --gpus=1 -t 30 --mem=32G -c 8
 apptainer exec --nv containers/gfootball.sif python GRF_MARL/test_grf_marl.py --gpu
+```
+
+### Hierarchical Meta-Policy (5v5 Hard)
+
+The project includes a hierarchical meta-policy for 5v5 GRF, configured in `GRF_MARL/expr_configs/hierarchical/5_vs_5_hard/hierarchical_meta.yaml`:
+
+- **Meta-policy**: MLP + PPO selecting among fixed, pretrained 5v5 policies in `light_malib/trained_models/gr_football/5_vs_5/` (e.g., `defense_v3`, `PassingMain_v2`, `3-1_formation`, `3-1_LongPass`).
+- **Execution**: Rollout workers run low-level GRF control; a top-level policy picks which pretrained sub-policy to use over time using PPO.
+- **Training entrypoint**: `GRF_MARL/run_hierarchical_train.sh` (full run) and `GRF_MARL/run_hierarchical_test.sh` (short integration test).
+
+To train the hierarchical meta-policy:
+
+```bash
+apptainer exec --nv containers/gfootball.sif bash GRF_MARL/run_hierarchical_train.sh
 ```
 
 ## Project Structure

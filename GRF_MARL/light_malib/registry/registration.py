@@ -27,6 +27,10 @@ from light_malib.algorithm.bc.policy import BC
 from light_malib.algorithm.bc.loss import BCLoss
 from light_malib.algorithm.bc.trainer import BCTrainer
 
+# Hierarchical RL
+from light_malib.algorithm.hierarchical.policy import HierarchicalMAPPO
+from light_malib.algorithm.hierarchical.loss import HierarchicalMAPPOLoss
+from light_malib.algorithm.hierarchical.trainer import HierarchicalMAPPOTrainer
 
 from light_malib.envs.gr_football.env import GRFootballEnv
 

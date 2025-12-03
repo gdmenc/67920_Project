@@ -123,9 +123,10 @@ class MAPPO(Policy):
         )
 
         self._use_q_head = custom_config["use_q_head"]
-        self.device = torch.device(
-            "cuda" if custom_config.get("use_cuda", False) else "cpu"
-        )
+        # Always initialize on CPU to avoid Ray serialization issues with CUDA tensors
+        # Policy will be moved to GPU via to_device() when needed for training
+        self.device = torch.device("cpu")
+        self._use_cuda = custom_config.get("use_cuda", False)  # Store for later use
         # self.env_agent_id = kwargs["env_agent_id"]
         
         # TODO(jh): retrieve from feature encoder as well.
@@ -369,20 +370,27 @@ class MAPPO(Policy):
             **kwargs,
         )
 
+        # Always load on CPU first to avoid Ray serialization issues
+        # Models will be moved to GPU via to_device() when needed for training
+        # Clone state_dict to ensure tensors don't retain CUDA storage references
         actor_path = os.path.join(dump_dir, "actor.pt")
         if os.path.exists(actor_path):
-            actor = torch.load(actor_path, res.device)
-            hard_update(res.actor, actor)
+            actor = torch.load(actor_path, map_location='cpu')
+            # Clone to CPU to remove any CUDA storage references
+            cpu_state_dict = {k: v.cpu().clone() for k, v in actor.state_dict().items()}
+            res.actor.load_state_dict(cpu_state_dict)
             
         critic_path = os.path.join(dump_dir, "critic.pt")
         if os.path.exists(critic_path):
-            critic = torch.load(critic_path, res.device)
-            hard_update(res.critic, critic)
+            critic = torch.load(critic_path, map_location='cpu')
+            cpu_state_dict = {k: v.cpu().clone() for k, v in critic.state_dict().items()}
+            res.critic.load_state_dict(cpu_state_dict)
         
         if res.share_backbone:
             backbone_path = os.path.join(dump_dir, "backbone.pt")
             if os.path.exists(backbone_path):
-                backbone = torch.load(backbone_path, res.device)
-                hard_update(res.backbone, backbone)
+                backbone = torch.load(backbone_path, map_location='cpu')
+                cpu_state_dict = {k: v.cpu().clone() for k, v in backbone.state_dict().items()}
+                res.backbone.load_state_dict(cpu_state_dict)
                 
         return res

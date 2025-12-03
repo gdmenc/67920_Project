@@ -15,6 +15,7 @@ from . import built_in
 from . import basic
 from . import basic_enhanced
 from . import enhanced_LightActionMask_5
+from . import hierarchical
 from ._legacy import enhanced_extended, enhanced_LightActionMask_11
 from ._legacy.enhanced_LightActionMask_11 import PartialLayernorm
 import sys
