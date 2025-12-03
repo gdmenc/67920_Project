@@ -1,6 +1,0 @@
-[submodule "football"]
-	path = football
-	url = https://github.com/google-research/football.git
-[submodule "GRF_MARL"]
-        path = GRF_MARL
-        url = https://github.com/jidiai/GRF_MARL.git
