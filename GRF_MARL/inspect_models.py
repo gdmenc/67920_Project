@@ -40,11 +40,12 @@ def inspect_model_file(model_path):
         return None, f"Error: {e}"
 
 def main():
-    models_dir = "../light_malib/trained_models/gr_football/5_vs_5"
+    models_dir = "light_malib/trained_models/gr_football/5_vs_5"
     
     print("=" * 70)
     print("PRETRAINED MODEL INSPECTION")
     print("=" * 70)
+
     
     for model_name in sorted(os.listdir(models_dir)):
         model_path = os.path.join(models_dir, model_name)

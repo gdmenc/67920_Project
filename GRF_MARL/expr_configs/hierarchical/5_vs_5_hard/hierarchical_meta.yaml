@@ -4,7 +4,7 @@
 expr_group: gr_football
 expr_name: hierarchical_meta_mlp_ppo_5_vs_5_hard
 log_dir: ./logs
-seed: 0
+seed: 67920
 eval_only: False
 
 distributed:
@@ -26,14 +26,14 @@ framework:
     type: "win_rate_stopper"
     kwargs:
       min_win_rate: 1.1 # Don't stop
-      max_steps: 2000  # iterations (~360M env steps with 80 workers)
+      max_steps: 1000
 
 agent_manager:
   num_agents: 2
   share_policies: False
 
 evaluation_manager:
-  num_eval_rollouts: 25  # More rollouts for reliable win rate estimation
+  num_eval_rollouts: 1  # More rollouts for reliable win rate estimation
 
 policy_data_manager:
   update_func: "gr_football" 
@@ -71,11 +71,11 @@ rollout_manager:
       num_cpus: 1
       resources:
         - ["node:${distributed.nodes.master.ip}",0.01]
-  num_workers: 100  # Near-max for 128 cores (leave headroom for system)
+  num_workers: 100  # half of the available cores to be safe
   seed: 12345
   saving_interval: 100
-  batch_size: ${rollout_manager.num_workers}
-  eval_batch_size: 50
+  batch_size: 200
+  eval_batch_size: 100
   eval_freq: 10  
   rollout_metric_cfgs:
     reward:
@@ -138,7 +138,7 @@ training_manager:
         num_cpus: 1
   num_trainers: 2
   update_interval: 1
-  gpu_preload: True  # Enable GPU preloading for faster training
+  gpu_preload: False 
   trainer:
     distributed:
       resources:
@@ -148,7 +148,7 @@ training_manager:
           - ["node:${distributed.nodes.master.ip}",0.01]
     optimizer: "Adam"
     actor_lr: 3.e-4  # Slightly lower for meta-policy
-    critic_lr: 3.e-4
+    critic_lr: 3.e-4 # Slightly lower for meta-policy
     opti_eps: 1.e-5
     weight_decay: 0.0
     lr_decay: False
@@ -233,7 +233,7 @@ populations:
         use_cuda: False  # Rollout workers have no GPU; training uses GPU regardless
         use_q_head: False
         ppo_epoch: 20
-        num_mini_batch: 2  # Increased for training stability
+        num_mini_batch: 1  # Increased for training stability
         
         return_mode: new_gae
         gae:

@@ -35,7 +35,7 @@ fi
 
 # Start Ray cluster with all available resources
 echo "Starting Ray cluster..."
-ray start --head --num-cpus=128 --num-gpus=2
+ray start --head
 
 echo ""
 echo "=========================================="

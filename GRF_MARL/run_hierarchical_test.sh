@@ -37,7 +37,7 @@ echo ""
 echo "=========================================="
 echo "  Running Hierarchical Integration Test"
 echo "  Config: hierarchical_meta_test.yaml"
-echo "  Workers: 4, Iterations: 3"
+echo "  wandb project: gr_football-hierarchical_meta_test_5_vs_5_hard"
 echo "=========================================="
 echo ""
 

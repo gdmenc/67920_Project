@@ -3,7 +3,7 @@
 # Run: python light_malib/main_psro.py --config expr_configs/hierarchical/5_vs_5_hard/hierarchical_meta_test.yaml
 
 expr_group: gr_football
-expr_name: hierarchical_meta_test
+expr_name: hierarchical_meta_test_5_vs_5_hard
 log_dir: ./logs
 seed: 0
 eval_only: False
@@ -72,7 +72,7 @@ rollout_manager:
       num_cpus: 1
       resources:
         - ["node:${distributed.nodes.master.ip}",0.01]
-  num_workers: 4  # Minimal workers for quick test
+  num_workers: 64  # Minimal workers for quick test
   seed: 12345
   saving_interval: 1
   batch_size: ${rollout_manager.num_workers}
@@ -91,8 +91,8 @@ rollout_manager:
     distributed:
       resources:
         num_cpus: 1
-    rollout_length: 500  # Shortened episodes for faster testing
-    eval_rollout_length: 500
+    rollout_length: 3001                                    # episode length
+    eval_rollout_length: 3001          
     sample_length: 0
     padding_length:
     rollout_func_name: "rollout_func_hierarchical"  # Use hierarchical rollout
@@ -139,7 +139,7 @@ training_manager:
         num_cpus: 1
   num_trainers: 1
   update_interval: 1
-  gpu_preload: False  # Disabled for quick test
+  gpu_preload: True  # Disabled for quick test
   trainer:
     distributed:
       resources:
@@ -233,7 +233,7 @@ populations:
         gamma: 0.995
         use_cuda: False  # Must be False - PolicyServer workers don't have GPU access
         use_q_head: False
-        ppo_epoch: 5  # Reduced for faster test
+        ppo_epoch: 20  # Reduced for faster test
         num_mini_batch: 1
         
         return_mode: new_gae
