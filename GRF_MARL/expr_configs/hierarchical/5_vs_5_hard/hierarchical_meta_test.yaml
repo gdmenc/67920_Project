@@ -139,7 +139,7 @@ training_manager:
         num_cpus: 1
   num_trainers: 1
   update_interval: 1
-  gpu_preload: True  # Disabled for quick test
+  gpu_preload: False  # Disabled for quick test
   trainer:
     distributed:
       resources:
