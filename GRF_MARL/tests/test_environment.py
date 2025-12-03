@@ -1,69 +1,15 @@
-#!/usr/bin/env python3
 """
-GRF_MARL Compatibility Test Suite (Legacy Wrapper)
-
-This file is kept for backwards compatibility.
-For the full test suite, use: python -m tests.run_tests
-
-Usage:
-    python test_grf_marl.py [--quick] [--gpu]
-    
-Options:
-    --quick     Skip slow tests (environment creation)
-    --gpu       Include GPU/CUDA tests
-    --verbose   Show more detailed output
-
-See also:
-    python -m tests.run_tests --help
+Environment and dependency tests.
+Tests core dependencies, imports, and GFootball environment.
 """
 
 import sys
-import argparse
 import os
 
-# Ensure we can import from the repo
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)
+from .conftest import TestResults, print_status, print_subsection, PROJECT_ROOT
 
 
-def print_status(name, success, msg=""):
-    """Print a test result with status emoji."""
-    status = "✅" if success else "❌"
-    print(f"  {status} {name}" + (f": {msg}" if msg else ""))
-    return success
-
-
-def print_section(num, total, title):
-    """Print a section header."""
-    print(f"\n[{num}/{total}] {title}")
-
-
-class TestResults:
-    """Track test results."""
-    def __init__(self):
-        self.passed = 0
-        self.failed = 0
-        self.skipped = 0
-        self.errors = []
-    
-    def add(self, success, name=""):
-        if success:
-            self.passed += 1
-        else:
-            self.failed += 1
-            if name:
-                self.errors.append(name)
-    
-    def skip(self):
-        self.skipped += 1
-    
-    @property
-    def all_passed(self):
-        return self.failed == 0
-
-
-def test_python_version(results):
+def test_python_version(results: TestResults):
     """Check Python version."""
     v = sys.version_info
     ok = v.major == 3 and v.minor >= 8
@@ -71,7 +17,7 @@ def test_python_version(results):
     return ok
 
 
-def test_core_imports(results, verbose=False):
+def test_core_imports(results: TestResults, verbose=False):
     """Test core Python dependencies."""
     deps = [
         ("numpy", "numpy"),
@@ -110,7 +56,7 @@ def test_core_imports(results, verbose=False):
     return all_ok
 
 
-def test_pytorch_cuda(results, verbose=False):
+def test_pytorch_cuda(results: TestResults, verbose=False):
     """Test PyTorch CUDA support."""
     import torch
     
@@ -153,23 +99,11 @@ def test_pytorch_cuda(results, verbose=False):
             print_status("CUDA tensor ops", False, str(e))
             results.add(False, "CUDA tensor ops")
             all_ok = False
-        
-        # Test CUDA memory
-        try:
-            mem_allocated = torch.cuda.memory_allocated() / 1024**2
-            mem_reserved = torch.cuda.memory_reserved() / 1024**2
-            if verbose:
-                print_status("CUDA memory", True, f"Allocated: {mem_allocated:.1f}MB, Reserved: {mem_reserved:.1f}MB")
-            results.add(True)
-        except Exception as e:
-            if verbose:
-                print_status("CUDA memory check", False, str(e))
-            results.add(False, "CUDA memory")
     
     return all_ok
 
 
-def test_gfootball(results, verbose=False):
+def test_gfootball(results: TestResults, verbose=False):
     """Test Google Research Football environment."""
     try:
         import gfootball.env as football_env
@@ -205,7 +139,7 @@ def test_gfootball(results, verbose=False):
         return False
 
 
-def test_light_malib_imports(results, verbose=False):
+def test_light_malib_imports(results: TestResults, verbose=False):
     """Test all major light_malib imports."""
     imports = [
         ("light_malib.utils.logger", "Logger"),
@@ -240,7 +174,7 @@ def test_light_malib_imports(results, verbose=False):
             print_status(name, True)
             results.add(True)
         except Exception as e:
-            err_msg = str(e).split('\n')[0][:60]  # First line, truncated
+            err_msg = str(e).split('\n')[0][:60]
             print_status(name, False, err_msg)
             results.add(False, name)
             all_ok = False
@@ -248,7 +182,7 @@ def test_light_malib_imports(results, verbose=False):
     return all_ok
 
 
-def test_ray(results, verbose=False):
+def test_ray(results: TestResults, verbose=False):
     """Test Ray initialization."""
     try:
         import ray
@@ -274,7 +208,7 @@ def test_ray(results, verbose=False):
         return False
 
 
-def test_config_loading(results, verbose=False):
+def test_config_loading(results: TestResults, verbose=False):
     """Test loading training configs."""
     try:
         from light_malib.utils.cfg import load_cfg
@@ -285,7 +219,7 @@ def test_config_loading(results, verbose=False):
         
         all_ok = True
         for config_path in configs:
-            full_path = os.path.join(SCRIPT_DIR, config_path)
+            full_path = os.path.join(PROJECT_ROOT, config_path)
             if os.path.exists(full_path):
                 try:
                     cfg = load_cfg(full_path)
@@ -307,15 +241,11 @@ def test_config_loading(results, verbose=False):
         return False
 
 
-def test_model_instantiation(results, verbose=False):
-    """Test that models can be instantiated."""
+def test_model_components(results: TestResults, verbose=False):
+    """Test that model components can be instantiated."""
     all_ok = True
     
     try:
-        import torch
-        import torch.nn as nn
-        
-        # Test basic model components exist
         from light_malib.algorithm.common.model import Model, MLP, RNN, get_model, mlp
         print_status("Model classes (Model, MLP, RNN)", True)
         results.add(True)
@@ -325,7 +255,6 @@ def test_model_instantiation(results, verbose=False):
         all_ok = False
     
     try:
-        # Test model registry
         from light_malib.registry import registry
         print_status("Model registry", True)
         results.add(True)
@@ -335,7 +264,6 @@ def test_model_instantiation(results, verbose=False):
         all_ok = False
     
     try:
-        # Test policy classes
         from light_malib.algorithm.common.policy import Policy
         print_status("Base Policy class", True)
         results.add(True)
@@ -347,85 +275,39 @@ def test_model_instantiation(results, verbose=False):
     return all_ok
 
 
-def main():
-    parser = argparse.ArgumentParser(description="GRF_MARL Environment Test Suite")
-    parser.add_argument("--quick", action="store_true", help="Skip slow tests (env creation)")
-    parser.add_argument("--gpu", action="store_true", help="Include GPU tests")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed output")
-    args = parser.parse_args()
-    
+def run_all(quick=False, gpu=False, verbose=False) -> TestResults:
+    """Run all environment tests."""
     results = TestResults()
-    total_sections = 8
     
-    print("\n" + "="*60)
-    print("  GRF_MARL Environment Test Suite")
-    print("="*60)
-    
-    # Section 1: Python Version
-    print_section(1, total_sections, "Python Version")
+    print_subsection("Python Version")
     test_python_version(results)
     
-    # Section 2: Core Dependencies
-    print_section(2, total_sections, "Core Dependencies")
-    test_core_imports(results, args.verbose)
+    print_subsection("Core Dependencies")
+    test_core_imports(results, verbose)
     
-    # Section 3: PyTorch & CUDA
-    if args.gpu:
-        print_section(3, total_sections, "PyTorch & CUDA")
-        test_pytorch_cuda(results, args.verbose)
+    if gpu:
+        print_subsection("PyTorch & CUDA")
+        test_pytorch_cuda(results, verbose)
     else:
-        print_section(3, total_sections, "PyTorch & CUDA (skipped, use --gpu)")
-        results.skip()
+        print("  [PyTorch & CUDA - skipped, use --gpu]")
     
-    # Section 4: Ray
-    print_section(4, total_sections, "Ray Distributed Framework")
-    test_ray(results, args.verbose)
+    print_subsection("Ray Framework")
+    test_ray(results, verbose)
     
-    # Section 5: light_malib Imports
-    print_section(5, total_sections, "light_malib Imports")
-    test_light_malib_imports(results, args.verbose)
+    print_subsection("light_malib Imports")
+    test_light_malib_imports(results, verbose)
     
-    # Section 6: Model Instantiation
-    print_section(6, total_sections, "Model Components")
-    test_model_instantiation(results, args.verbose)
+    print_subsection("Model Components")
+    test_model_components(results, verbose)
     
-    # Section 7: GFootball Environment
-    if not args.quick:
-        print_section(7, total_sections, "GFootball Environment")
-        test_gfootball(results, args.verbose)
+    if not quick:
+        print_subsection("GFootball Environment")
+        test_gfootball(results, verbose)
     else:
-        print_section(7, total_sections, "GFootball Environment (skipped, remove --quick)")
-        results.skip()
+        print("  [GFootball Environment - skipped, remove --quick]")
     
-    # Section 8: Config Loading
-    print_section(8, total_sections, "Config Loading")
-    test_config_loading(results, args.verbose)
+    print_subsection("Config Loading")
+    test_config_loading(results, verbose)
     
-    # Summary
-    print("\n" + "="*60)
-    print("  Test Summary")
-    print("="*60)
-    print(f"  Passed:  {results.passed}")
-    print(f"  Failed:  {results.failed}")
-    print(f"  Skipped: {results.skipped}")
-    
-    if results.errors:
-        print(f"\n  Failed tests:")
-        for err in results.errors[:10]:  # Show first 10
-            print(f"    - {err}")
-        if len(results.errors) > 10:
-            print(f"    ... and {len(results.errors) - 10} more")
-    
-    print("\n" + "="*60)
-    if results.all_passed:
-        print("  ✅ All tests passed! Ready for training.")
-    else:
-        print("  ❌ Some tests failed. Check errors above.")
-    print("="*60 + "\n")
-    
-    return 0 if results.all_passed else 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    return results
 

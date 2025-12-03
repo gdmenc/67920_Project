@@ -36,7 +36,8 @@ class SlidingMetric:
         init_list = kwargs.get("init_list", [])
         self.window_size = window_size
         self.window = list(init_list)
-        self.ptr = len(self.window)
+        # Fix: ptr should wrap around if init_list fills the window
+        self.ptr = len(self.window) % self.window_size if self.window_size > 0 else 0
 
     def update(self, value):
         if len(self.window) < self.window_size:
