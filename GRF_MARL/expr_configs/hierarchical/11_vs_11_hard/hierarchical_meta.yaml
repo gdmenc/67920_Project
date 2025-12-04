@@ -1,0 +1,276 @@
+# Hierarchical Meta-Policy Configuration
+# Trains a meta-policy that selects among pre-trained sub-policies
+
+expr_group: gr_football
+expr_name: global_hierarchical_meta_mlp_ppo_11_vs_11_hard
+log_dir: ./logs
+seed: 67920
+eval_only: False
+
+distributed:
+  use: False
+  auto_connect:
+  auto_copy:
+  nodes:
+    master:
+      ip: "auto"
+    workers:      
+      - ip:
+
+framework:
+  name: "psro"
+  max_rounds: 1
+  meta_solver: "nash"
+  sync_training: True
+  stopper:
+    type: "win_rate_stopper"
+    kwargs:
+      min_win_rate: 1.1 # Don't stop
+      max_steps: 1000
+
+agent_manager:
+  num_agents: 2
+  share_policies: False
+
+evaluation_manager:
+  num_eval_rollouts: 1  # More rollouts for reliable win rate estimation
+
+policy_data_manager:
+  update_func: "gr_football" 
+  fields:
+    payoff:
+      type: "matrix"
+      missing_value: -100 
+    score:
+      type: "matrix"
+      missing_value: -100 
+    win:
+      type: "matrix"
+      missing_value: -100 
+    lose:
+      type: "matrix"
+      missing_value: -100 
+    my_goal:
+      type: "matrix"
+      missing_value: -100 
+    goal_diff:
+      type: "matrix"
+      missing_value: -100 
+        
+monitor:
+  type: "remote"  # 'local': tensorboard, 'remote': wandb
+  distributed:
+    resources:
+      num_cpus: 1
+      resources:
+        - ["node:${distributed.nodes.master.ip}",0.01]
+
+rollout_manager:
+  distributed:
+    resources:
+      num_cpus: 1
+      resources:
+        - ["node:${distributed.nodes.master.ip}",0.01]
+  num_workers: 100  # half of the available cores to be safe
+  seed: 12345
+  saving_interval: 10
+  batch_size: 200
+  eval_batch_size: 100
+  eval_freq: 10  
+  rollout_metric_cfgs:
+    reward:
+      type: "sliding"
+      window_size: 20
+      init_list: [-10000]
+    win:
+      type: "sliding"
+      window_size: 20
+      init_list: [0,0,0,0,0]
+  worker:
+    distributed:
+      resources:
+        num_cpus: 1
+    rollout_length: 3001
+    eval_rollout_length: 3001
+    sample_length: 0
+    padding_length:
+    rollout_func_name: "rollout_func_hierarchical"  # Use hierarchical rollout
+    episode_mode: 'traj'
+    envs:
+      - cls: "gr_football"
+        id_prefix: "gr_football"
+        scenario_config:
+          env_name: "benchmark_full_game_11_vs_11_hard"
+          number_of_left_players_agent_controls: 10
+          number_of_right_players_agent_controls: 1
+          representation: "raw"
+          rewards: "scoring,checkpoints"
+          stacked: False
+          logdir: '/tmp/football/hierarchical'
+          write_goal_dumps: False
+          write_full_episode_dumps: False
+          render: False
+          other_config_options:
+            action_set: v2
+        reward_config:
+          goal_reward: 0
+          official_reward: 1
+    credit_reassign:
+    decaying_exploration:
+      init_noise: 0
+      total_epoch_to_zero: 1000
+      interval: 200
+
+training_manager:
+  distributed:
+    resources:
+      num_cpus: 1
+      resources:
+        - ["node:${distributed.nodes.master.ip}",0.01]
+  master_addr: "127.0.0.1"
+  master_port: "12775"
+  local_queue_size: 1
+  batch_size: ${rollout_manager.batch_size}
+  num_prefetchers: 1
+  data_prefetcher:
+    distributed:
+      resources:
+        num_cpus: 1
+  num_trainers: 2
+  update_interval: 1
+  gpu_preload: False 
+  trainer:
+    distributed:
+      resources:
+        num_cpus: 1
+        num_gpus: 1
+        resources:
+          - ["node:${distributed.nodes.master.ip}",0.01]
+    optimizer: "Adam"
+    actor_lr: 3.e-4  # Slightly lower for meta-policy
+    critic_lr: 3.e-4 # Slightly lower for meta-policy
+    opti_eps: 1.e-5
+    weight_decay: 0.0
+    lr_decay: False
+    lr_decay_epoch: 1000
+
+data_server:
+  distributed:
+    resources:
+      num_cpus: 1
+      resources:
+        - ["node:${distributed.nodes.master.ip}",0.01]
+  table_cfg:
+    capacity: 1000
+    sampler_type: "lumrf"
+    sample_max_usage: 1
+    rate_limiter_cfg:
+      min_size: ${training_manager.batch_size}
+  read_timeout: 1
+
+policy_server:
+  distributed:
+    resources:
+      num_cpus: 1
+      resources:
+        - ["node:${distributed.nodes.master.ip}",0.01]
+
+populations:
+  - population_id: default
+    algorithm:
+      name: "HierarchicalMAPPO"
+      model_config:
+        model: "gr_football.hierarchical"
+        initialization:
+          use_orthogonal: True
+          gain: 1.
+        actor:
+          network: mlp
+          layers:
+            - units: 512
+              activation: ReLU
+            - units: 256
+              activation: ReLU
+            - units: 128
+              activation: ReLU
+          output:
+            activation: False
+        critic:
+          network: mlp
+          layers:
+            - units: 512
+              activation: ReLU
+            - units: 256
+              activation: ReLU
+            - units: 128
+              activation: ReLU
+          output:
+            activation: False
+
+      custom_config:
+        num_agents: 10  # Required for MetaActor broadcasting (10 controlled players)
+        FE_cfg:
+          num_players: 22  # 11v11
+          encoder_type: "encoder_global_enhanced"
+
+        # Sub-policies to choose from
+        sub_policies:
+          - name: "defensive_passer"
+            path: "light_malib/trained_models/gr_football/11_vs_11/defensive_passer"
+          - name: "flank_pass"
+            path: "light_malib/trained_models/gr_football/11_vs_11/flank_pass"
+          - name: "group_pressure"
+            path: "light_malib/trained_models/gr_football/11_vs_11/group_pressure"
+          - name: "offensive_passer"
+            path: "light_malib/trained_models/gr_football/11_vs_11/offensive_passer"
+
+        # Commitment configuration
+        commitment:
+          mode: "steps"  # "steps", "events", or "both"
+          min_steps: 100
+          # events: ["possession_change", "game_mode_change"]
+
+        # Standard PPO hyperparameters
+        gamma: 0.995
+        use_cuda: False  # Rollout workers have no GPU; training uses GPU regardless
+        use_q_head: False
+        ppo_epoch: 20
+        num_mini_batch: 1  # Increased for training stability
+        
+        return_mode: new_gae
+        gae:
+          gae_lambda: 0.95
+        vtrace:
+          clip_rho_threshold: 1.0
+          clip_pg_rho_threshold: 100.0
+
+        use_rnn: False
+        rnn_layer_num: 1
+        rnn_data_chunk_length: 16
+
+        use_feature_normalization: True
+        use_popart: True
+        popart_beta: 0.99999
+
+        entropy_coef: 0.01  # Higher entropy for exploration of sub-policies
+        clip_param: 0.2
+
+      policy_init_cfg:
+        agent_0:
+          new_policy_ctr_start: -1
+          init_cfg:
+            - condition: "==0"
+              strategy: random
+              policy_id: 
+              policy_dir:
+          initial_policies:
+
+        agent_1:
+          new_policy_ctr_start: -1
+          init_cfg:
+            - condition: "==0"
+              strategy: pretrained
+              policy_id: built_in
+              policy_dir: light_malib/trained_models/gr_football/11_vs_11/built_in
+          initial_policies:
+
