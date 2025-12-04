@@ -1,6 +1,10 @@
 #!/bin/bash
-# Integration test for Hierarchical Meta-Policy
-# Runs 3 iterations with 4 workers to verify pipeline works end-to-end
+# Full training run for Hierarchical Meta-Policy
+# Trains meta-policy to select among pre-trained sub-policies
+# 
+# Hardware requirements: 128 cores, 2 A100 GPUs, 320GB RAM
+# Expected runtime: Several hours to days depending on convergence
+# Target: ~600M environment steps (2000 iterations × 100 workers × 3001 steps)
 
 set -e  # Exit on error
 
@@ -29,25 +33,27 @@ if ray status &> /dev/null; then
     ray stop
 fi
 
-# Start Ray cluster
+# Start Ray cluster with all available resources
 echo "Starting Ray cluster..."
 ray start --head
 
 echo ""
 echo "=========================================="
-echo "  Running Hierarchical Integration Test"
-echo "  Config: hierarchical_meta_test.yaml"
-echo "  wandb project: gr_football-hierarchical_meta_test_11_vs_11_hard"
+echo "  Hierarchical Meta-Policy Training"
+echo "  Config: hierarchical_meta.yaml"
+echo "  Wandb project: gr_football-hierarchical_meta_mlp_ppo_5_vs_5_hard"
 echo "=========================================="
 echo ""
 
-# Run integration test
-python3 light_malib/main_pbt.py --config expr_configs/hierarchical/11_vs_11_hard/hierarchical_meta_test.yaml
+# Run training
+python3 light_malib/main_pbt.py --config expr_configs/hierarchical/5_vs_5_hard/hierarchical_meta_enhanced.yaml
 
 # Cleanup
 echo "Stopping Ray cluster..."
 ray stop
 
 echo ""
-echo "Integration test completed!"
+echo "Training completed!"
+echo "Check wandb for results: https://wandb.ai"
+echo "Logs saved to: ./logs/"
 

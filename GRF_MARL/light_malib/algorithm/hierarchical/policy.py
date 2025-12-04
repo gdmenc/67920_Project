@@ -74,7 +74,18 @@ class HierarchicalMAPPO(Policy):
         # Feature encoder from the model
         FE_cfg = custom_config.get('FE_cfg', None)
         if FE_cfg is not None:
-            self.feature_encoder = model.FeatureEncoder(**FE_cfg)
+            # Check for custom encoder type
+            encoder_type = FE_cfg.get('encoder_type', None)
+            if encoder_type:
+                Logger.info(f"Loading custom feature encoder: {encoder_type}")
+                try:
+                    encoder_module = importlib.import_module(f"light_malib.envs.gr_football.encoders.{encoder_type}")
+                    self.feature_encoder = encoder_module.FeatureEncoder(**FE_cfg)
+                except ImportError as e:
+                    Logger.error(f"Failed to load encoder {encoder_type}: {e}")
+                    raise
+            else:
+                self.feature_encoder = model.FeatureEncoder(**FE_cfg)
         else:
             self.feature_encoder = model.FeatureEncoder()
             

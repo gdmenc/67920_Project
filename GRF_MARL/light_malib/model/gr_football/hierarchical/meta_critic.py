@@ -29,6 +29,14 @@ class MetaCritic(nn.Module):
     ):
         super().__init__()
         
+        # Extract num_players for reshaping
+        if "num_agents" in custom_config:
+            self.num_players = custom_config["num_agents"]
+        elif "FE_cfg" in custom_config and "num_players" in custom_config["FE_cfg"]:
+            self.num_players = custom_config["FE_cfg"]["num_players"]
+        else:
+            self.num_players = 10 
+        
         # Critic outputs a single value V(s)
         value_space = Discrete(1)
         
@@ -46,20 +54,44 @@ class MetaCritic(nn.Module):
         
     def forward(self, observations, critic_rnn_states, rnn_masks):
         """
-        Forward pass for meta-critic.
+        Forward pass for meta-critic with Global State.
         
         Args:
-            observations: Current observations [batch_size, obs_dim]
-            critic_rnn_states: RNN hidden states (if using RNN)
-            rnn_masks: Masks for RNN (done flags)
+            observations: [batch_size * num_players, global_obs_dim]
+            critic_rnn_states: RNN hidden states
+            rnn_masks: Masks for RNN
             
         Returns:
-            values: State values [batch_size, 1]
+            values: State values [batch_size * num_players, 1]
             critic_rnn_states: Updated RNN states
         """
-        values, critic_rnn_states = self._base_net.forward(
-            observations, critic_rnn_states, rnn_masks
+        # Reshape to [batch, num_players, obs_dim]
+        batch_size = observations.shape[0] // self.num_players
+        obs_dim = observations.shape[1]
+        
+        obs_reshaped = observations.view(batch_size, self.num_players, obs_dim)
+        global_obs = obs_reshaped[:, 0, :]
+        
+        # Handle RNN states
+        rnn_states_reshaped = critic_rnn_states.view(batch_size, self.num_players, self.rnn_layer_num, self.rnn_state_size)
+        global_rnn_states = rnn_states_reshaped[:, 0, :, :]
+        
+        # Handle Masks
+        masks_reshaped = rnn_masks.view(batch_size, self.num_players, 1)
+        global_masks = masks_reshaped[:, 0, :]
+        
+        # Forward pass
+        # values: [batch, 1]
+        values, new_rnn_states = self._base_net.forward(
+            global_obs, global_rnn_states, global_masks
         )
         
-        return values, critic_rnn_states
+        # Broadcast results back
+        # values: [batch, 1] -> [batch, num_players, 1] -> [batch * num_players, 1]
+        values_broadcast = values.unsqueeze(1).repeat(1, self.num_players, 1).view(-1, 1)
+        
+        # rnn_states: [batch, layer, hidden] -> [batch * num_players, layer, hidden]
+        rnn_states_broadcast = new_rnn_states.unsqueeze(1).repeat(1, self.num_players, 1, 1).view(-1, self.rnn_layer_num, self.rnn_state_size)
+        
+        return values_broadcast, rnn_states_broadcast
 

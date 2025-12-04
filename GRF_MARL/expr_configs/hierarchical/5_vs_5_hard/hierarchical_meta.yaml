@@ -2,7 +2,7 @@
 # Trains a meta-policy that selects among pre-trained sub-policies
 
 expr_group: gr_football
-expr_name: hierarchical_meta_mlp_ppo_5_vs_5_hard
+expr_name: global_hierarchical_meta_mlp_ppo_5_vs_5_hard
 log_dir: ./logs
 seed: 67920
 eval_only: False
@@ -73,7 +73,7 @@ rollout_manager:
         - ["node:${distributed.nodes.master.ip}",0.01]
   num_workers: 100  # half of the available cores to be safe
   seed: 12345
-  saving_interval: 100
+  saving_interval: 10
   batch_size: 200
   eval_batch_size: 100
   eval_freq: 10  
@@ -187,29 +187,31 @@ populations:
         actor:
           network: mlp
           layers:
+            - units: 512
+              activation: ReLU
             - units: 256
               activation: ReLU
             - units: 128
-              activation: ReLU
-            - units: 64
               activation: ReLU
           output:
             activation: False
         critic:
           network: mlp
           layers:
+            - units: 512
+              activation: ReLU
             - units: 256
               activation: ReLU
             - units: 128
-              activation: ReLU
-            - units: 64
               activation: ReLU
           output:
             activation: False
 
       custom_config:
+        num_agents: 4  # Required for MetaActor broadcasting (4 controlled players)
         FE_cfg:
           num_players: 10  # 5v5
+          encoder_type: "encoder_global_enhanced"
 
         # Sub-policies to choose from
         sub_policies:
