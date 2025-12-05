@@ -330,13 +330,18 @@ class HierarchicalMAPPO(Policy):
             # First step, must select a policy
             return True
             
+        # Enforce minimum commitment steps as a hard constraint
+        if steps_since_switch < self.min_commitment_steps:
+            return False
+            
         if self.commitment_mode == 'steps':
             return steps_since_switch >= self.min_commitment_steps
         elif self.commitment_mode == 'events':
             return event_occurred
         elif self.commitment_mode == 'both':
-            # Switch if EITHER condition is met (but must have min steps OR event)
-            return steps_since_switch >= self.min_commitment_steps or event_occurred
+            # Switch ONLY if BOTH conditions are met
+            # This enforces strict commitment: must wait min_steps AND wait for an event
+            return steps_since_switch >= self.min_commitment_steps and event_occurred
         else:
             # Default: always allow switching
             return True

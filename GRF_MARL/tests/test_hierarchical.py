@@ -156,11 +156,13 @@ def test_meta_actor_forward(policy, results: TestResults, verbose=False):
     
     try:
         batch_size = 8
+        num_players = 10  # From config
+        total_batch = batch_size * num_players
         obs_dim = policy.observation_space.shape[0]
         
-        test_obs = torch.randn(batch_size, obs_dim)
-        test_rnn_state = torch.zeros(batch_size, policy.actor.rnn_layer_num, policy.actor.rnn_state_size)
-        test_masks = torch.zeros(batch_size, 1)
+        test_obs = torch.randn(total_batch, obs_dim)
+        test_rnn_state = torch.zeros(total_batch, policy.actor.rnn_layer_num, policy.actor.rnn_state_size)
+        test_masks = torch.zeros(total_batch, 1)
         
         # Test 1: Explore mode (stochastic)
         with torch.no_grad():
@@ -169,9 +171,9 @@ def test_meta_actor_forward(policy, results: TestResults, verbose=False):
                 action_masks=None, explore=True, actions=None
             )
         
-        assert actions_explore.shape == (batch_size,), f"Action shape wrong: {actions_explore.shape}"
+        assert actions_explore.shape == (total_batch,), f"Action shape wrong: {actions_explore.shape}"
         assert all(0 <= a < policy.num_sub_policies for a in actions_explore), "Actions out of range"
-        assert log_probs.shape == (batch_size,), f"Log prob shape wrong: {log_probs.shape}"
+        assert log_probs.shape == (total_batch, 1), f"Log prob shape wrong: {log_probs.shape}"
         assert torch.all(torch.isfinite(log_probs)), "Log probs contain NaN/Inf"
         
         print_status("Meta-actor explore mode", True)
@@ -184,7 +186,7 @@ def test_meta_actor_forward(policy, results: TestResults, verbose=False):
                 action_masks=None, explore=False, actions=None
             )
         
-        assert actions_det.shape == (batch_size,), f"Deterministic action shape wrong"
+        assert actions_det.shape == (total_batch,), f"Deterministic action shape wrong"
         print_status("Meta-actor deterministic mode", True)
         results.add(True)
         
@@ -195,9 +197,9 @@ def test_meta_actor_forward(policy, results: TestResults, verbose=False):
                 action_masks=None, explore=False, actions=actions_explore
             )
         
-        assert log_probs_eval.shape == (batch_size,), f"Eval log prob shape wrong"
+        assert log_probs_eval.shape == (total_batch, 1), f"Eval log prob shape wrong"
         assert entropy is not None, "Entropy should be returned when actions provided"
-        assert entropy.shape == (batch_size,), f"Entropy shape wrong: {entropy.shape}"
+        assert entropy.shape == (total_batch, 1), f"Entropy shape wrong: {entropy.shape}"
         assert torch.all(entropy >= 0), "Entropy should be non-negative"
         
         print_status("Meta-actor action evaluation", True)
@@ -230,17 +232,19 @@ def test_meta_critic_forward(policy, results: TestResults, verbose=False):
     
     try:
         batch_size = 8
+        num_players = 10
+        total_batch = batch_size * num_players
         obs_dim = policy.observation_space.shape[0]
         
-        test_obs = torch.randn(batch_size, obs_dim)
-        test_rnn_state = torch.zeros(batch_size, policy.critic.rnn_layer_num, policy.critic.rnn_state_size)
-        test_masks = torch.zeros(batch_size, 1)
+        test_obs = torch.randn(total_batch, obs_dim)
+        test_rnn_state = torch.zeros(total_batch, policy.critic.rnn_layer_num, policy.critic.rnn_state_size)
+        test_masks = torch.zeros(total_batch, 1)
         
         # Test 1: Forward pass
         with torch.no_grad():
             values, new_rnn_state = policy.critic(test_obs, test_rnn_state, test_masks)
         
-        assert values.shape == (batch_size, 1), f"Value shape wrong: {values.shape}"
+        assert values.shape == (total_batch, 1), f"Value shape wrong: {values.shape}"
         assert torch.all(torch.isfinite(values)), "Values contain NaN/Inf"
         
         print_status("Meta-critic forward pass", True)
@@ -280,15 +284,17 @@ def test_gradient_flow(policy, results: TestResults, verbose=False):
     
     try:
         batch_size = 4
+        num_players = 10
+        total_batch = batch_size * num_players
         obs_dim = policy.observation_space.shape[0]
         
         # Set to training mode
         policy.train()
         
         # Create inputs
-        test_obs = torch.randn(batch_size, obs_dim, requires_grad=False)
-        test_rnn_state = torch.zeros(batch_size, policy.actor.rnn_layer_num, policy.actor.rnn_state_size)
-        test_masks = torch.zeros(batch_size, 1)
+        test_obs = torch.randn(total_batch, obs_dim, requires_grad=False)
+        test_rnn_state = torch.zeros(total_batch, policy.actor.rnn_layer_num, policy.actor.rnn_state_size)
+        test_masks = torch.zeros(total_batch, 1)
         
         # Test 1: Meta-actor gradient flow
         actions, rnn_out, log_probs, _ = policy.actor(
@@ -364,14 +370,16 @@ def test_full_forward_pipeline(policy, results: TestResults, verbose=False):
     
     try:
         batch_size = 4
+        num_players = 10
+        total_batch = batch_size * num_players
         obs_dim = policy.observation_space.shape[0]
         
         # Create realistic inputs
-        test_obs = np.random.randn(batch_size, obs_dim).astype(np.float32)
-        test_done = np.zeros((batch_size, 1), dtype=bool)
-        test_action_mask = np.ones((batch_size, 19), dtype=np.float32)  # 19 low-level actions
+        test_obs = np.random.randn(total_batch, obs_dim).astype(np.float32)
+        test_done = np.zeros((total_batch, 1), dtype=bool)
+        test_action_mask = np.ones((total_batch, 19), dtype=np.float32)  # 19 low-level actions
         
-        initial_state = policy.get_initial_state(batch_size)
+        initial_state = policy.get_initial_state(total_batch)
         
         # Stage 1: Meta-policy decision
         meta_output = policy.compute_meta_action(
@@ -388,7 +396,7 @@ def test_full_forward_pipeline(policy, results: TestResults, verbose=False):
         )
         
         meta_actions = meta_output[EpisodeKey.ACTION]
-        assert meta_actions.shape == (batch_size,), f"Meta action shape wrong: {meta_actions.shape}"
+        assert meta_actions.shape == (total_batch,), f"Meta action shape wrong: {meta_actions.shape}"
         assert all(0 <= a < policy.num_sub_policies for a in meta_actions), "Invalid meta actions"
         
         print_status("Stage 1: Meta-policy decision", True)
@@ -399,7 +407,7 @@ def test_full_forward_pipeline(policy, results: TestResults, verbose=False):
         selected_idx = int(meta_actions[0])
         sub_actor = policy.sub_policies[selected_idx]
         sub_rnn_state = np.zeros(
-            (batch_size, sub_actor.rnn_layer_num, sub_actor.rnn_state_size),
+            (total_batch, sub_actor.rnn_layer_num, sub_actor.rnn_state_size),
             dtype=np.float32
         )
         
@@ -417,7 +425,7 @@ def test_full_forward_pipeline(policy, results: TestResults, verbose=False):
             )
             
             low_level_actions = sub_output[EpisodeKey.ACTION]
-            assert low_level_actions.shape == (batch_size,), f"Low-level action shape wrong"
+            assert low_level_actions.shape == (total_batch,), f"Low-level action shape wrong"
             assert all(0 <= a < 19 for a in low_level_actions), "Invalid low-level actions"
             
             print_status("Stage 2: Sub-policy execution", True)
@@ -448,7 +456,7 @@ def test_full_forward_pipeline(policy, results: TestResults, verbose=False):
         )
         
         values = value_output[EpisodeKey.STATE_VALUE]
-        assert values.shape == (batch_size, 1), f"Value shape wrong: {values.shape}"
+        assert values.shape == (total_batch, 1), f"Value shape wrong: {values.shape}"
         
         print_status("Stage 3: Value estimation", True)
         results.add(True)
@@ -507,13 +515,15 @@ def test_compute_meta_action(policy, results: TestResults, verbose=False):
     
     try:
         batch_size = 4  # 4 agents
+        num_players = 10
+        total_batch = batch_size * num_players
         obs_dim = policy.observation_space.shape[0]
         
-        test_obs = np.random.randn(batch_size, obs_dim).astype(np.float32)
-        test_done = np.zeros((batch_size, 1), dtype=bool)
-        test_action_mask = np.ones((batch_size, 19), dtype=np.float32)
+        test_obs = np.random.randn(total_batch, obs_dim).astype(np.float32)
+        test_done = np.zeros((total_batch, 1), dtype=bool)
+        test_action_mask = np.ones((total_batch, 19), dtype=np.float32)
         
-        initial_state = policy.get_initial_state(batch_size)
+        initial_state = policy.get_initial_state(total_batch)
         
         meta_output = policy.compute_meta_action(
             **{
@@ -716,12 +726,13 @@ def test_commitment_logic(policy, results: TestResults, verbose=False):
         
         # Test step-based (mode='both' with min_steps=50)
         assert policy.should_switch_policy(10, False) == False, "Shouldn't switch before min_steps"
-        assert policy.should_switch_policy(50, False) == True, "Should switch at min_steps"
+        assert policy.should_switch_policy(50, False) == False, "Shouldn't switch if no event (in 'both' mode)"
         print_status("should_switch (step-based)", True)
         results.add(True)
         
         # Test event-based
-        assert policy.should_switch_policy(10, True) == True, "Should switch on event"
+        assert policy.should_switch_policy(10, True) == False, "Shouldn't switch before min_steps even with event"
+        assert policy.should_switch_policy(50, True) == True, "Should switch when BOTH min_steps and event occur"
         print_status("should_switch (event-based)", True)
         results.add(True)
         

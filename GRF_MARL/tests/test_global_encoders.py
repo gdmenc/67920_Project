@@ -5,7 +5,8 @@ import os
 import gym
 
 # Add project root to path
-sys.path.append("/home/maxt114/67920_Project/GRF_MARL")
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from light_malib.envs.gr_football.encoders import encoder_global_basic, encoder_global_enhanced
 from light_malib.model.gr_football.hierarchical.meta_actor import MetaActor

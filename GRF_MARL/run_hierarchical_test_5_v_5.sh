@@ -37,12 +37,12 @@ echo ""
 echo "=========================================="
 echo "  Running Hierarchical Integration Test"
 echo "  Config: hierarchical_meta_test.yaml"
-echo "  wandb project: gr_football-hierarchical_meta_test_11_vs_11_hard"
+echo "  wandb project: gr_football-hierarchical_meta_test_5_vs_5_hard"
 echo "=========================================="
 echo ""
 
 # Run integration test
-python3 light_malib/main_pbt.py --config expr_configs/hierarchical/11_vs_11_hard/hierarchical_meta_test.yaml
+python3 light_malib/main_pbt.py --config expr_configs/hierarchical/5_vs_5_hard/hierarchical_meta_test.yaml
 
 # Cleanup
 echo "Stopping Ray cluster..."

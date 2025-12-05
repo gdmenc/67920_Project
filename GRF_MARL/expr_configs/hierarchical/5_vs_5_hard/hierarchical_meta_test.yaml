@@ -87,6 +87,10 @@ rollout_manager:
       type: "sliding"
       window_size: 5
       init_list: [0,0,0,0,0]
+    policy_switches:
+      type: "sliding"
+      window_size: 5
+      init_list: [0]
   worker:
     distributed:
       resources:
@@ -188,8 +192,6 @@ populations:
         actor:
           network: mlp
           layers:
-            - units: 512
-              activation: ReLU
             - units: 256
               activation: ReLU
             - units: 128
@@ -199,8 +201,6 @@ populations:
         critic:
           network: mlp
           layers:
-            - units: 512
-              activation: ReLU
             - units: 256
               activation: ReLU
             - units: 128
@@ -228,7 +228,7 @@ populations:
         # Commitment configuration
         commitment:
           mode: "both"
-          min_steps: 50
+          min_steps: 25
           events: ["possession_change", "game_mode_change"]
 
         # PPO hyperparameters (same as full config)
@@ -236,7 +236,7 @@ populations:
         use_cuda: False  # Must be False - PolicyServer workers don't have GPU access
         use_q_head: False
         ppo_epoch: 20  # Reduced for faster test
-        num_mini_batch: 1
+        num_mini_batch: 2
         
         return_mode: new_gae
         gae:
@@ -253,7 +253,7 @@ populations:
         use_popart: True
         popart_beta: 0.99999
 
-        entropy_coef: 0.01
+        entropy_coef: 0.05
         clip_param: 0.2
 
       policy_init_cfg:
