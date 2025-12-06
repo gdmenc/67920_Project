@@ -332,17 +332,26 @@ def rollout_func(
                     
                     # Get selected sub-policy (team-wide decision)
                     meta_actions = meta_output[EpisodeKey.ACTION]
-                    current_sub_policy_idx = int(meta_actions[0])  # Same for all agents
+                    new_sub_policy_idx = int(meta_actions[0])  # Same for all agents
                     
-                    # CRITICAL FIX: Update policy's internal state so it knows we switched
-                    main_policy._current_sub_policy_idx = current_sub_policy_idx
+                    prev_sub_policy_idx = main_policy._current_sub_policy_idx
                     
-                    # Reset sub-policy RNN state for new policy
-                    sub_actor = main_policy.sub_policies[current_sub_policy_idx]
-                    sub_policy_rnn_states[current_sub_policy_idx] = np.zeros(
-                        (num_players, sub_actor.rnn_layer_num, sub_actor.rnn_state_size),
-                        dtype=np.float32
-                    )
+                    # Update policy's internal state
+                    main_policy._current_sub_policy_idx = new_sub_policy_idx
+                    
+                    # Only reset RNN state and increment counter if policy ACTUALLY changed
+                    if new_sub_policy_idx != prev_sub_policy_idx:
+                         episode_switch_count += 1
+                         
+                         # Reset sub-policy RNN state for new policy
+                         sub_actor = main_policy.sub_policies[new_sub_policy_idx]
+                         sub_policy_rnn_states[new_sub_policy_idx] = np.zeros(
+                             (num_players, sub_actor.rnn_layer_num, sub_actor.rnn_state_size),
+                             dtype=np.float32
+                         )
+                    else:
+                         # Keep existing RNN state (continuity)
+                         pass
                     
                     # Save meta-decision state for later (including log_prob and value for training)
                     # IMPORTANT: Save the INPUT RNN state (single copy), not the output state

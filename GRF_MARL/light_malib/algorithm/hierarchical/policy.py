@@ -108,10 +108,23 @@ class HierarchicalMAPPO(Policy):
         # Meta-policy action space = number of sub-policies
         meta_action_space = gym.spaces.Discrete(self.num_sub_policies)
         
+        # Meta-policy observation space = Concatenation of all player observations
+        # This fixes the issue where only the first player's observation was being used
+        # If using global encoder (where all obs are same), this adds redundancy but is robust
+        # If using local encoder, this essentially creates a global view from local parts
+        single_obs_shape = observation_space.shape
+        meta_obs_dim = single_obs_shape[0] * self.num_players
+        meta_observation_space = gym.spaces.Box(
+            low=observation_space.low[0], # Assuming same bounds
+            high=observation_space.high[0],
+            shape=(meta_obs_dim,),
+            dtype=observation_space.dtype
+        )
+        
         super(HierarchicalMAPPO, self).__init__(
             registered_name=registered_name,
-            observation_space=observation_space,
-            action_space=meta_action_space,  # Meta-level action space
+            observation_space=meta_observation_space,  # Use concatenated space
+            action_space=meta_action_space,
             model_config=model_config,
             custom_config=custom_config,
         )

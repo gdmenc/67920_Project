@@ -80,9 +80,10 @@ class MetaActor(nn.Module):
         
         obs_reshaped = observations.view(batch_size, self.num_players, obs_dim)
         
-        # Take the first player's observation (since all are identical global states)
-        # Shape: [batch, obs_dim]
-        global_obs = obs_reshaped[:, 0, :]
+        # Flatten observations from all players to form the global state
+        # Shape: [batch, num_players * obs_dim]
+        # This gives the meta-policy access to everything any agent sees
+        global_obs = obs_reshaped.view(batch_size, -1)
         
         # Handle RNN states
         # actor_rnn_states: [batch * num_players, layer, hidden]
@@ -145,7 +146,8 @@ class MetaActor(nn.Module):
         # Similar reshaping logic
         batch_size = obs.shape[0] // self.num_players
         obs_reshaped = obs.view(batch_size, self.num_players, -1)
-        global_obs = obs_reshaped[:, 0, :]
+        # Global obs is concatenation of all
+        global_obs = obs_reshaped.view(batch_size, -1)
         
         rnn_states_reshaped = rnn_states.view(batch_size, self.num_players, self.rnn_layer_num, self.rnn_state_size)
         global_rnn_states = rnn_states_reshaped[:, 0, :, :]

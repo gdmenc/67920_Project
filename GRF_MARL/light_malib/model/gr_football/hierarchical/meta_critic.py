@@ -70,7 +70,7 @@ class MetaCritic(nn.Module):
         obs_dim = observations.shape[1]
         
         obs_reshaped = observations.view(batch_size, self.num_players, obs_dim)
-        global_obs = obs_reshaped[:, 0, :]
+        global_obs = obs_reshaped.view(batch_size, -1)
         
         # Handle RNN states
         rnn_states_reshaped = critic_rnn_states.view(batch_size, self.num_players, self.rnn_layer_num, self.rnn_state_size)
