@@ -555,6 +555,21 @@ def rollout_func(
                     }
                      meta_step_data_list.append(final_transition)
 
+                # Submit meta-level trajectory for hierarchical policy training
+                if not eval and len(meta_step_data_list) > 0:
+                     # Construct meta_last_step_data for bootstrapping the end of this episode
+                     meta_last_step_data = {
+                         rollout_desc.agent_id: {
+                             EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
+                             EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
+                             # Use current meta RNN states for bootstrapping
+                             EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
+                             EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
+                         }
+                     }
+                     submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
+                     meta_step_data_list = [] # Clear for next episode
+
             results.append(result)
             
             # Reset environment
@@ -573,28 +588,9 @@ def rollout_func(
     # Submit remaining data
     if not eval and sample_length <= 0:
         if episode_mode == 'traj':
-            if is_hierarchical and len(meta_step_data_list) > 0:
-                # For hierarchical policies, submit meta-level transitions
-                # These contain meta-actions (0-3) for training the meta-policy
-                
-                # Submit meta-level trajectory for hierarchical policy training
-                    
-                
-                # Submit meta-level trajectory for hierarchical policy training
-                # Construct meta_last_step_data for bootstrapping
-                meta_last_step_data = {
-                    rollout_desc.agent_id: {
-                        EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
-                        EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
-                        # Use current meta RNN states for bootstrapping
-                        EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
-                        EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
-                    }
-                }
-                
-                submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
-            else:
-                # Standard (non-hierarchical) submission
+             # Only submit standard (non-hierarchical) data here if needed
+             # Hierarchical data is already submitted per episode
+             if not is_hierarchical:
                 submit_traj(data_server, step_data_list, step_data, rollout_desc)
     
     results = {"results": results}
