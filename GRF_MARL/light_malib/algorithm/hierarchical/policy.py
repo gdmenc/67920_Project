@@ -561,19 +561,19 @@ class HierarchicalMAPPO(Policy):
             sub_encoder = self.sub_policy_encoders[sub_policy_idx]
             
             # DEBUG: Inspect raw states and re-encoding process
-            if np.random.rand() < 0.001:  # 0.1% chance to print to avoid spam
-                Logger.info(f"DEBUG: Executing sub-policy {self.sub_policy_names[sub_policy_idx]}")
-                Logger.info(f"DEBUG: raw_states type: {type(raw_states)}, len: {len(raw_states) if raw_states else 'None'}")
-                first_state = raw_states[0] if raw_states else None
-                if first_state:
-                    Logger.info(f"DEBUG: first_state class: {first_state.__class__.__name__}")
-                    Logger.info(f"DEBUG: first_state.obs keys: {first_state.obs.keys() if hasattr(first_state, 'obs') else 'No .obs'}")
+            # if np.random.rand() < 0.001:  # 0.1% chance to print to avoid spam
+            #    Logger.info(f"DEBUG: Executing sub-policy {self.sub_policy_names[sub_policy_idx]}")
+            #    Logger.info(f"DEBUG: raw_states type: {type(raw_states)}, len: {len(raw_states) if raw_states else 'None'}")
+            #    first_state = raw_states[0] if raw_states else None
+            #    if first_state:
+            #        Logger.info(f"DEBUG: first_state class: {first_state.__class__.__name__}")
+            #        Logger.info(f"DEBUG: first_state.obs keys: {first_state.obs.keys() if hasattr(first_state, 'obs') else 'No .obs'}")
             
             encoded_obs = sub_encoder.encode(raw_states)
             
-            if np.random.rand() < 0.001:
-                Logger.info(f"DEBUG: Encoded obs shape: {np.array(encoded_obs).shape}")
-                Logger.info(f"DEBUG: Encoded obs sample: {np.array(encoded_obs)[0, :10]}")
+            # if np.random.rand() < 0.001:
+            #    Logger.info(f"DEBUG: Encoded obs shape: {np.array(encoded_obs).shape}")
+            #    Logger.info(f"DEBUG: Encoded obs sample: {np.array(encoded_obs)[0, :10]}")
             
             observations = np.array(encoded_obs, dtype=np.float32)
             
@@ -625,8 +625,8 @@ class HierarchicalMAPPO(Policy):
                  action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
                  
                  # START DEBUG
-                 if np.random.rand() < 0.001:
-                      Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
+                 # if np.random.rand() < 0.001:
+                 #     Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
                  # END DEBUG
             
             # Fallback if extraction failed or shape didn't match
