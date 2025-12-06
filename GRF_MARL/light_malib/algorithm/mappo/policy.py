@@ -111,6 +111,10 @@ class MAPPO(Policy):
 
         # jh: re-define observation space based on feature encoder
         # Only override if configured to do so (default True for backward compatibility)
+        Logger.info(f"DEBUG: MAPPO Init - Custom Config Keys: {list(custom_config.keys()) if custom_config else 'None'}")
+        Logger.info(f"DEBUG: MAPPO Init - Input Obs Space Shape: {observation_space.shape if hasattr(observation_space, 'shape') else observation_space}")
+        Logger.info(f"DEBUG: MAPPO Init - use_feature_encoder_obs: {custom_config.get('use_feature_encoder_obs', 'Not Set')}")
+        
         if custom_config.get("use_feature_encoder_obs", True):
             global_observation_space = self.feature_encoder.global_observation_space
             observation_space = self.feature_encoder.observation_space
