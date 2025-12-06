@@ -309,23 +309,17 @@ def rollout_func(
                         meta_step_data_list.append(meta_transition)
                     
                     # Prepare inputs for meta-decision
-                    # IMPORTANT: Meta-policy needs GLOBAL VISION (all players' observations concatenated)
-                    # policy_inputs shape is [num_players, obs_dim], we need [num_players, obs_dim * num_players]
-                    
-                    player_obs = policy_inputs[agent_id][EpisodeKey.CUR_OBS]  # [num_players, obs_dim]
-                    
-                    # Concatenate all players' observations into one global obs
-                    # e.g., [4, 225] -> flatten to [1, 900], then replicate to [4, 900]
-                    global_obs_flat = player_obs.flatten()  # [900]
-                    global_obs = np.tile(global_obs_flat, (num_players, 1))  # [4, 900]
-                    
-                    meta_inputs = {
-                        EpisodeKey.CUR_OBS: global_obs,
-                        EpisodeKey.ACTION_MASK: policy_inputs[agent_id].get(EpisodeKey.ACTION_MASK),
-                        EpisodeKey.DONE: policy_inputs[agent_id][EpisodeKey.DONE],
-                    }
+                    # We must use the current meta-policy RNN state (input state)
+                    meta_inputs = policy_inputs[agent_id].copy()
                     
                     # Replicate RNN states for all players (MetaActor expects batch * num_players)
+                    # meta_actor_rnn_state is [1, layer, hidden], we need [num_players, layer, hidden]
+                    meta_inputs[EpisodeKey.ACTOR_RNN_STATE] = np.repeat(
+                        meta_actor_rnn_state, num_players, axis=0
+                    )
+                    meta_inputs[EpisodeKey.CRITIC_RNN_STATE] = np.repeat(
+                        meta_critic_rnn_state, num_players, axis=0
+                    )
                     # meta_actor_rnn_state is [1, layer, hidden], we need [num_players, layer, hidden]
                     meta_inputs[EpisodeKey.ACTOR_RNN_STATE] = np.repeat(
                         meta_actor_rnn_state, num_players, axis=0
@@ -369,9 +363,8 @@ def rollout_func(
                          pass
                     
                     # Save meta-decision state for later (including log_prob and value for training)
-                    # IMPORTANT: Save the GLOBAL observation (900-dim), not single-player obs!
-                    # global_obs was computed earlier as the concatenation of all players' observations
-                    meta_decision_obs = global_obs.copy()
+                    # IMPORTANT: Save the INPUT RNN state (single copy), not the output state
+                    meta_decision_obs = policy_inputs[agent_id][EpisodeKey.CUR_OBS].copy()
                     meta_decision_state = {
                         EpisodeKey.ACTION_MASK: policy_inputs[agent_id].get(EpisodeKey.ACTION_MASK),
                         EpisodeKey.ACTOR_RNN_STATE: meta_actor_rnn_state.copy(),  # Save INPUT state (single)
