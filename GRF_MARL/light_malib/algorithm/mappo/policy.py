@@ -110,9 +110,13 @@ class MAPPO(Policy):
             self.feature_encoder = model.FeatureEncoder()
 
         # jh: re-define observation space based on feature encoder
-        global_observation_space = self.feature_encoder.global_observation_space
-        observation_space = self.feature_encoder.observation_space
-        action_space = self.feature_encoder.action_space
+        # Only override if configured to do so (default True for backward compatibility)
+        if custom_config.get("use_feature_encoder_obs", True):
+            global_observation_space = self.feature_encoder.global_observation_space
+            observation_space = self.feature_encoder.observation_space
+            action_space = self.feature_encoder.action_space
+        else:
+            global_observation_space = observation_space # Fallback if not using encoder's global obs
 
         super(MAPPO, self).__init__(
             registered_name=registered_name,

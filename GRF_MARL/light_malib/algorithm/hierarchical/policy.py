@@ -131,6 +131,9 @@ class HierarchicalMAPPO(Policy):
             dtype=observation_space.dtype
         )
         
+        # Disable MAPPO's default behavior of ignoring the passed observation_space
+        custom_config["use_feature_encoder_obs"] = False
+        
         super(HierarchicalMAPPO, self).__init__(
             registered_name=registered_name,
             observation_space=meta_observation_space,  # Use concatenated space
