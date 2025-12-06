@@ -226,9 +226,9 @@ populations:
 
         # Commitment configuration
         commitment:
-          mode: "steps"  # "steps", "events", or "both"
-          min_steps: 25
-          # events: ["possession_change", "game_mode_change"]
+          mode: "both"  # "steps", "events", or "both"
+          min_steps: 15 # Reduced from 25 to allow slightly faster reactions if needed
+          events: ["possession_change", "game_mode_change"]
 
         # Standard PPO hyperparameters
         gamma: 0.995
