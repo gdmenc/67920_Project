@@ -573,6 +573,59 @@ class HierarchicalMAPPO(Policy):
                 Logger.info(f"DEBUG: Encoded obs sample: {np.array(encoded_obs)[0, :10]}")
             
             observations = np.array(encoded_obs, dtype=np.float32)
+            
+            # CRITICAL FIX: Re-compute action masks using the sub-policy's encoder logic!
+            # The meta-encoder (encoder_global_enhanced) might return all-ones masks,
+            # but sub-policies (encoder_basic) rely on specific action masking logic.
+            # Using the wrong mask (e.g. all-ones) can lead to illegal actions and failure.
+            
+            # We need to construct 'his_actions' which looks like it's derived from state history
+            # But here we might just pass empty list or extract from raw state if available.
+            # Looking at encoder_basic.py:64, his_actions = state.action_list
+            
+            action_masks_list = []
+            for s in raw_states:
+                # Extract his_actions from the state object
+                his_actions = s.action_list if hasattr(s, 'action_list') else []
+                obs_dict = s.obs
+                
+                # Get ball distance from obs or compute it
+                ball_x, ball_y, _ = obs_dict["ball"]
+                # Need player position but that depends on agent index.
+                # However, encoder_basic.get_available_actions only uses 'ball_distance' arg,
+                # effectively re-calculating it or verifying it.
+                # Actually encoder_basic.get_available_actions(obs, ball_distance, his_actions)
+                
+                # We can call encoder.get_available_actions directly if we reconstruct the args
+                # Or deeper: sub_encoder.encode_each(s) actually computes 'avail' internally!
+                # If 'avail' is part of the encoded observation (which it is for encoder_basic), 
+                # we don't strictly need a separate mask IF the policy uses the mask from the observation?? 
+                # BUT MAPPO uses 'action_mask' passed separately to the actor forward pass to mask logits.
+                
+                # So we MUST generate the mask.
+                # Let's see if we can extract it from the newly encoded observation?
+                # encoder_basic puts 'avail' (19 dims) at the START of the feature vector if sorted keys are used and 'avail' is in dict.
+                # 'avail' comes first alphabetically.
+                # Let's verify 'avail' is in the state_dict in encoder_basic.py:183. Yes.
+                # So the first 19 elements of 'encoded_obs' ARE the action mask!
+                pass
+                
+            # If the encoder embeds the mask in the observation, we can extract it!
+            # For encoder_basic (133 dims), the first 19 dims are 'avail' mask.
+            if observations.shape[-1] == 133 or observations.shape[-1] == 115 + 19: # heuristics
+                 # Extract mask from observations
+                 # obs is [batch, 133]
+                 extracted_masks = observations[:, :19]
+                 
+                 # Update the action_masks tensor
+                 # Ensure binary (it should be 0.0 or 1.0 already)
+                 action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
+                 
+                 # START DEBUG
+                 if np.random.rand() < 0.001:
+                      Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
+                 # END DEBUG
+            
         elif needs_reencoding and raw_states is None:
             # Need re-encoding but no raw states provided
             raise ValueError(
@@ -583,8 +636,17 @@ class HierarchicalMAPPO(Policy):
         else:
             # Compatible encoder, use provided observations
             observations = kwargs[EpisodeKey.CUR_OBS]
+            
+            # Convert to tensor
+            if isinstance(observations, np.ndarray):
+                observations = torch.tensor(observations, device=self.device, dtype=torch.float32)
+                
+            # Use provided masks
+            action_masks = kwargs.get(EpisodeKey.ACTION_MASK)
+            if action_masks is not None and isinstance(action_masks, np.ndarray):
+                action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
         
-        # Convert to tensor
+        # Convert to tensor (if not already done inside re-encoding block)
         if isinstance(observations, np.ndarray):
             observations = torch.tensor(observations, device=self.device, dtype=torch.float32)
             
@@ -595,10 +657,6 @@ class HierarchicalMAPPO(Policy):
         rnn_masks = kwargs.get(EpisodeKey.DONE)
         if rnn_masks is not None and isinstance(rnn_masks, np.ndarray):
             rnn_masks = torch.tensor(rnn_masks, device=self.device, dtype=torch.float32)
-            
-        action_masks = kwargs.get(EpisodeKey.ACTION_MASK)
-        if action_masks is not None and isinstance(action_masks, np.ndarray):
-            action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
         
         explore = kwargs.get("explore", False)  # Usually False for sub-policy execution
         to_numpy = kwargs.get("to_numpy", True)
