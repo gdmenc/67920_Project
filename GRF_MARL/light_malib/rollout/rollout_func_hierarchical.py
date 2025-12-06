@@ -532,6 +532,29 @@ def rollout_func(
                 if any_needs_reencoding:
                     result["multi_encoder_mode"] = True
                 
+                # IMPORTANT: Save the final transition of the episode!
+                # Otherwise we lose the data from the last switch until the end of episode.
+                if not eval and current_sub_policy_idx is not None and meta_decision_obs is not None:
+                     final_transition = {
+                        EpisodeKey.CUR_OBS: meta_decision_obs,
+                        EpisodeKey.ACTION: np.array([current_sub_policy_idx] * num_players),
+                        EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
+                        EpisodeKey.DONE: np.ones((num_players, 1), dtype=bool),  # Episode ended
+                        EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
+                        EpisodeKey.ACTOR_RNN_STATE: np.repeat(
+                            meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE), 
+                            num_players, axis=0
+                        ),
+                        EpisodeKey.CRITIC_RNN_STATE: np.repeat(
+                            meta_decision_state.get(EpisodeKey.CRITIC_RNN_STATE), 
+                            num_players, axis=0
+                        ),
+                        # Required for PPO loss computation
+                        EpisodeKey.ACTION_LOG_PROB: meta_decision_state.get(EpisodeKey.ACTION_LOG_PROB),
+                        EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
+                    }
+                     meta_step_data_list.append(final_transition)
+
             results.append(result)
             
             # Reset environment
@@ -553,27 +576,8 @@ def rollout_func(
             if is_hierarchical and len(meta_step_data_list) > 0:
                 # For hierarchical policies, submit meta-level transitions
                 # These contain meta-actions (0-3) for training the meta-policy
-                # Add final transition if we have pending meta-state
-                if current_sub_policy_idx is not None and meta_decision_obs is not None:
-                    final_transition = {
-                        EpisodeKey.CUR_OBS: meta_decision_obs,
-                        EpisodeKey.ACTION: np.array([current_sub_policy_idx] * num_players),
-                        EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
-                        EpisodeKey.DONE: np.ones((num_players, 1), dtype=bool),  # Episode ended
-                        EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
-                        EpisodeKey.ACTOR_RNN_STATE: np.repeat(
-                            meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE), 
-                            num_players, axis=0
-                        ),
-                        EpisodeKey.CRITIC_RNN_STATE: np.repeat(
-                            meta_decision_state.get(EpisodeKey.CRITIC_RNN_STATE), 
-                            num_players, axis=0
-                        ),
-                        # Required for PPO loss computation
-                        EpisodeKey.ACTION_LOG_PROB: meta_decision_state.get(EpisodeKey.ACTION_LOG_PROB),
-                        EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
-                    }
-                    meta_step_data_list.append(final_transition)
+                
+                # Submit meta-level trajectory for hierarchical policy training
                     
                 
                 # Submit meta-level trajectory for hierarchical policy training
