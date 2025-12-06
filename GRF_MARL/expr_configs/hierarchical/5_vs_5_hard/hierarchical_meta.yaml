@@ -252,7 +252,7 @@ populations:
         use_popart: True
         popart_beta: 0.99999
 
-        entropy_coef: 0.05  # Higher entropy for exploration of sub-policies
+        entropy_coef: 0.01  # Lowered from 0.05 to encourage exploitation after plateau
         clip_param: 0.2
 
       policy_init_cfg:
