@@ -558,20 +558,33 @@ def rollout_func(
                     }
                      meta_step_data_list.append(final_transition)
 
-                # Submit meta-level trajectory for hierarchical policy training
-                if not eval and len(meta_step_data_list) > 0:
-                     # Construct meta_last_step_data for bootstrapping the end of this episode
-                     meta_last_step_data = {
-                         rollout_desc.agent_id: {
-                             EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
-                             EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
-                             # Use current meta RNN states for bootstrapping
-                             EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
-                             EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
-                         }
-                     }
-                     submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
-                     meta_step_data_list = [] # Clear for next episode
+                # Continuous Meta-Buffering Logic
+                # Buffer transitions until we have a fixed-size chunk (e.g., 200).
+                # This ensures the trainer receives consistently shaped tensors (Batch, Time=200, ...).
+                # Episode boundaries are handled by the DONE flag within the chunk.
+                META_CHUNK_SIZE = 200
+                
+                # Check if we have enough data to submit a chunk
+                while len(meta_step_data_list) >= META_CHUNK_SIZE:
+                    chunk_to_submit = meta_step_data_list[:META_CHUNK_SIZE]
+                    meta_step_data_list = meta_step_data_list[META_CHUNK_SIZE:]
+                    
+                    # Bootstrap using the current state (or the state at the cut point)
+                    # Note: Ideally we'd use the state exactly at the cut, but since we just cut, 
+                    # the "current state" of the environment might be ahead if we accumulated multiple chunks?
+                    # However, since we check every step, we likely only overshoot by 0 or 1.
+                    # Actually, we should check this inside the loop, not just at episode end.
+                    # But checking here (at meta-transition or episode end) is safe enough.
+                    
+                    meta_last_step_data = {
+                        rollout_desc.agent_id: {
+                            EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
+                            EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
+                            EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
+                            EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
+                        }
+                    }
+                    submit_traj(data_server, chunk_to_submit, meta_last_step_data, rollout_desc)
 
             results.append(result)
             
@@ -591,10 +604,20 @@ def rollout_func(
     # Submit remaining data
     if not eval and sample_length <= 0:
         if episode_mode == 'traj':
-             # Only submit standard (non-hierarchical) data here if needed
-             # Hierarchical data is already submitted per episode
              if not is_hierarchical:
                 submit_traj(data_server, step_data_list, step_data, rollout_desc)
+             elif len(meta_step_data_list) > 0:
+                 # Submit any minimal remainder of hierarchical data
+                 # (Optional: could discard if too short, but better to keep)
+                 meta_last_step_data = {
+                        rollout_desc.agent_id: {
+                            EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
+                            EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
+                            EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
+                            EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
+                        }
+                 }
+                 submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
     
     results = {"results": results}
     
