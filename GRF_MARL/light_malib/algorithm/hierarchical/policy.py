@@ -148,9 +148,10 @@ class HierarchicalMAPPO(Policy):
         self._use_cuda = custom_config.get("use_cuda", False)  # Store for later use
         
         # Create meta-policy actor and critic
+        # Use meta_observation_space (concatenated) instead of single-agent observation_space
         self.actor = model.Actor(
             self.model_config["actor"],
-            observation_space,
+            meta_observation_space,
             self.num_sub_policies,
             self.custom_config,
             self.model_config["initialization"],
@@ -158,7 +159,7 @@ class HierarchicalMAPPO(Policy):
         
         self.critic = model.Critic(
             self.model_config["critic"],
-            observation_space,
+            meta_observation_space,
             self.custom_config,
             self.model_config["initialization"],
         )
