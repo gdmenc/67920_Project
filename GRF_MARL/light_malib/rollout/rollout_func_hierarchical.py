@@ -559,23 +559,15 @@ def rollout_func(
                      meta_step_data_list.append(final_transition)
 
                 # Continuous Meta-Buffering Logic
-                # Buffer transitions until we have a fixed-size chunk (e.g., 200).
-                # This ensures the trainer receives consistently shaped tensors (Batch, Time=200, ...).
-                # Episode boundaries are handled by the DONE flag within the chunk.
-                META_CHUNK_SIZE = 200
+                # Buffer transitions until we have a fixed-size chunk.
+                # This ensures the trainer receives consistently shaped tensors (Batch, Time, ...).
+                META_CHUNK_SIZE = 100
                 
-                # Check if we have enough data to submit a chunk
                 while len(meta_step_data_list) >= META_CHUNK_SIZE:
                     chunk_to_submit = meta_step_data_list[:META_CHUNK_SIZE]
                     meta_step_data_list = meta_step_data_list[META_CHUNK_SIZE:]
                     
-                    # Bootstrap using the current state (or the state at the cut point)
-                    # Note: Ideally we'd use the state exactly at the cut, but since we just cut, 
-                    # the "current state" of the environment might be ahead if we accumulated multiple chunks?
-                    # However, since we check every step, we likely only overshoot by 0 or 1.
-                    # Actually, we should check this inside the loop, not just at episode end.
-                    # But checking here (at meta-transition or episode end) is safe enough.
-                    
+                    # Bootstrap using current state for the cut point
                     meta_last_step_data = {
                         rollout_desc.agent_id: {
                             EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
@@ -607,8 +599,22 @@ def rollout_func(
              if not is_hierarchical:
                 submit_traj(data_server, step_data_list, step_data, rollout_desc)
              elif len(meta_step_data_list) > 0:
-                 # Submit any minimal remainder of hierarchical data
-                 # (Optional: could discard if too short, but better to keep)
+                 # PAD the remainder to match META_CHUNK_SIZE
+                 # This is crucial for satisfying the (B, T, ...) shape assertion in GAE
+                 remainder_len = len(meta_step_data_list)
+                 needed = META_CHUNK_SIZE - remainder_len
+                 
+                 if needed > 0:
+                     last_valid_trans = meta_step_data_list[-1]
+                     # Create padding transition (DONE=True to mask values)
+                     padding_trans = last_valid_trans.copy()
+                     padding_trans[EpisodeKey.REWARD] = np.zeros_like(last_valid_trans[EpisodeKey.REWARD])
+                     padding_trans[EpisodeKey.DONE] = np.ones_like(last_valid_trans[EpisodeKey.DONE], dtype=bool)
+                     
+                     for _ in range(needed):
+                         meta_step_data_list.append(padding_trans)
+                 
+                 # Submit the now-full chunk
                  meta_last_step_data = {
                         rollout_desc.agent_id: {
                             EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
