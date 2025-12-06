@@ -501,12 +501,15 @@ def rollout_func(
                     s_idx = sample_length * (submit_ctr - 1)
                     e_idx = sample_length * submit_ctr
                     
-                    submit_traj(
-                        data_server, step_data_list, step_data, rollout_desc,
-                        s_idx, e_idx,
-                        credit_reassign_cfg=kwargs.get("credit_reassign_cfg"),
-                        assist_info=assist_info
-                    )
+                    # Only submit standard data here if NOT hierarchical
+                    # Hierarchical data is handled per-episode below
+                    if not is_hierarchical:
+                        submit_traj(
+                            data_server, step_data_list, step_data, rollout_desc,
+                            s_idx, e_idx,
+                            credit_reassign_cfg=kwargs.get("credit_reassign_cfg"),
+                            assist_info=assist_info
+                        )
                     
                     if submit_ctr != submit_max_num:
                         behavior_policies = pull_policies(rollout_worker, policy_ids)
