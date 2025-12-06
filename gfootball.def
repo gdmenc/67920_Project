@@ -18,6 +18,9 @@ From: python:3.9-bullseye
         libdirectfb-dev libst-dev mesa-utils xvfb x11vnc \
         gcc g++
 
+    apt-get remove -y cmake || true
+    pip install cmake==3.25.0
+
     pip install "setuptools==65.5.0" "wheel==0.38.4" psutil
     
     # PyTorch with CUDA 11.8 support (compatible with H100 GPUs)

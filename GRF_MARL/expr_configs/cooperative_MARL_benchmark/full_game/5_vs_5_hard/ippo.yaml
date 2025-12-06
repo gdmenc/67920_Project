@@ -2,7 +2,7 @@ expr_group: gr_football
 expr_name: full_game_5_vs_5_hard_ippo
 log_dir: ./logs             # log directory
 seed: 0
-eval_only: False            # True if only want evaluation
+eval_only: True            # True if only want evaluation
 
 distributed:
   use: False

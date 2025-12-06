@@ -5,7 +5,7 @@ expr_group: gr_football
 expr_name: hierarchical_meta_mlp_ppo_5_vs_5_hard
 log_dir: ./logs
 seed: 67920
-eval_only: False
+eval_only: True
 
 distributed:
   use: False
