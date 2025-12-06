@@ -573,6 +573,7 @@ def rollout_func(
                         EpisodeKey.ACTION_LOG_PROB: meta_decision_state.get(EpisodeKey.ACTION_LOG_PROB),
                         EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
                     }
+                    meta_step_data_list.append(final_transition)
                     
                 
                 # Submit meta-level trajectory for hierarchical policy training
