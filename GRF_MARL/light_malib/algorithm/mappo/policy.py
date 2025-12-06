@@ -115,6 +115,9 @@ class MAPPO(Policy):
         Logger.info(f"DEBUG: MAPPO Init - Input Obs Space Shape: {observation_space.shape if hasattr(observation_space, 'shape') else observation_space}")
         Logger.info(f"DEBUG: MAPPO Init - use_feature_encoder_obs: {custom_config.get('use_feature_encoder_obs', 'Not Set')}")
         
+        # Stop execution here to let user see the logs
+        raise RuntimeError(f"DEBUG STOP: use_feature_encoder_obs={custom_config.get('use_feature_encoder_obs', 'Not Set')}")
+        
         if custom_config.get("use_feature_encoder_obs", True):
             global_observation_space = self.feature_encoder.global_observation_space
             observation_space = self.feature_encoder.observation_space
