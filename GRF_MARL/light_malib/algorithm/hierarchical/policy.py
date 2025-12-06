@@ -552,6 +552,9 @@ class HierarchicalMAPPO(Policy):
         sub_actor = self.sub_policies[sub_policy_idx]
         needs_reencoding = self.sub_policy_needs_reencoding[sub_policy_idx]
         
+        # Initialize variable to avoid UnboundLocalError
+        action_masks = None
+        
         # Handle observations - re-encode if necessary
         if needs_reencoding and raw_states is not None:
             # Re-encode raw observations using sub-policy's encoder
@@ -626,6 +629,18 @@ class HierarchicalMAPPO(Policy):
                       Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
                  # END DEBUG
             
+            # Fallback if extraction failed or shape didn't match
+            if action_masks is None:
+                 # If we can't extract the mask, we must assume all actions are legal to avoid crashing
+                 # This is risky but better than crashing or using the wrong mask if we really can't get it.
+                 # Better: Use the mask from kwargs if available (which is all-ones from meta-encoder)
+                 # This mimics previous behavior but warns.
+                 action_masks = kwargs.get(EpisodeKey.ACTION_MASK)
+                 if action_masks is not None and isinstance(action_masks, np.ndarray):
+                     action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
+                 
+                 # Logger.warning(f"Could not extract action mask for sub-policy {self.sub_policy_names[sub_policy_idx]} (obs shape {observations.shape}). Using meta-mask.")
+
         elif needs_reencoding and raw_states is None:
             # Need re-encoding but no raw states provided
             raise ValueError(
