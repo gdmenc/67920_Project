@@ -110,20 +110,25 @@ class MAPPO(Policy):
             self.feature_encoder = model.FeatureEncoder()
 
         # jh: re-define observation space based on feature encoder
-        # Only override if configured to do so (default True for backward compatibility)
-        Logger.info(f"DEBUG: MAPPO Init - Custom Config Keys: {list(custom_config.keys()) if custom_config else 'None'}")
-        Logger.info(f"DEBUG: MAPPO Init - Input Obs Space Shape: {observation_space.shape if hasattr(observation_space, 'shape') else observation_space}")
-        Logger.info(f"DEBUG: MAPPO Init - use_feature_encoder_obs: {custom_config.get('use_feature_encoder_obs', 'Not Set')}")
+        # Robust logic: 
+        # 1. If explicit flag set to False, respect it.
+        # 2. If passed observation_space is larger than encoder's (e.g. hierarchical), respect it.
+        # 3. Otherwise, default to encoder's space (backward compatibility).
         
-        # Stop execution here to let user see the logs
-        raise RuntimeError(f"DEBUG STOP: use_feature_encoder_obs={custom_config.get('use_feature_encoder_obs', 'Not Set')}")
+        should_overwrite = custom_config.get("use_feature_encoder_obs", True)
         
-        if custom_config.get("use_feature_encoder_obs", True):
+        # Check size heuristic
+        if hasattr(observation_space, 'shape') and hasattr(self.feature_encoder.observation_space, 'shape'):
+            if observation_space.shape[0] > self.feature_encoder.observation_space.shape[0]:
+                Logger.info(f"MAPPO: Detected larger observation space ({observation_space.shape} vs {self.feature_encoder.observation_space.shape}). Keeping provided space.")
+                should_overwrite = False
+
+        if should_overwrite:
             global_observation_space = self.feature_encoder.global_observation_space
             observation_space = self.feature_encoder.observation_space
             action_space = self.feature_encoder.action_space
         else:
-            global_observation_space = observation_space # Fallback if not using encoder's global obs
+            global_observation_space = observation_space
 
         super(MAPPO, self).__init__(
             registered_name=registered_name,
