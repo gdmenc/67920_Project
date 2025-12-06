@@ -339,6 +339,9 @@ def rollout_func(
                     # Update policy's internal state
                     main_policy._current_sub_policy_idx = new_sub_policy_idx
                     
+                    # Update local variable so we can use it below
+                    current_sub_policy_idx = new_sub_policy_idx
+                    
                     # Only reset RNN state and increment counter if policy ACTUALLY changed
                     if new_sub_policy_idx != prev_sub_policy_idx:
                          episode_switch_count += 1
