@@ -112,6 +112,16 @@ class HierarchicalMAPPO(Policy):
         # This fixes the issue where only the first player's observation was being used
         # If using global encoder (where all obs are same), this adds redundancy but is robust
         # If using local encoder, this essentially creates a global view from local parts
+        
+        # Extract num_players for meta-policy observation space calculation
+        if "num_agents" in custom_config:
+            self.num_players = custom_config["num_agents"]
+        elif "FE_cfg" in custom_config and "num_players" in custom_config["FE_cfg"]:
+            self.num_players = custom_config["FE_cfg"]["num_players"]
+        else:
+            self.num_players = 4 # Default fallback for this specific scenario
+            Logger.warning(f"Could not determine num_players from config, defaulting to {self.num_players}")
+
         single_obs_shape = observation_space.shape
         meta_obs_dim = single_obs_shape[0] * self.num_players
         meta_observation_space = gym.spaces.Box(
