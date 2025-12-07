@@ -256,6 +256,7 @@ def rollout_func(
     meta_step_data_list = []  # For hierarchical: meta-level transitions
     results = []
     completed_policy_durations = []  # Track length of commitment segments
+    policy_usage_counts = {}  # Track total steps per policy index
     
     while step <= rollout_length:
         # Prepare policy inputs
@@ -449,6 +450,10 @@ def rollout_func(
                 policy_outputs[agent_id]['meta_action'] = current_sub_policy_idx
                 policy_outputs[agent_id]['steps_since_switch'] = steps_since_switch
                 
+                # Update usage stats
+                if current_sub_policy_idx is not None:
+                    policy_usage_counts[current_sub_policy_idx] = policy_usage_counts.get(current_sub_policy_idx, 0) + 1
+                
             else:
                 # Standard policy (opponent or non-hierarchical)
                 policy_outputs[agent_id] = policy.compute_action(
@@ -605,7 +610,10 @@ def rollout_func(
                 accumulated_reward = 0.0
                 meta_decision_obs = None
                 episode_switch_count = 0
+                meta_decision_obs = None
+                episode_switch_count = 0
                 completed_policy_durations = []
+                policy_usage_counts = {}
     
     # Submit remaining data
     if not eval and sample_length <= 0:
@@ -639,6 +647,32 @@ def rollout_func(
                  }
                  submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
     
+    
+    # Calculate metrics at end of episode (or rollout chunk)
+    result = results[main_agent_id] if is_hierarchical else results["total_reward"] # fallback
+    
+    if is_hierarchical:
+        # Commitment Length Metric
+        if len(completed_policy_durations) > 0:
+            result["avg_commitment_length"] = float(np.mean(completed_policy_durations))
+        else:
+            # If no switches happened and only one segment, use current duration
+            result["avg_commitment_length"] = float(steps_since_switch)
+            
+        # Policy Usage Time Metrics
+        # Tracks total steps spent in each sub-policy during this rollout
+        # We need to map indices back to names for readable logging
+        # We must aggregate this if 'results' accumulates multiple episodes
+        
+        # NOTE: rollout_func typically returns ONE episode or chunk.
+        # But we need to make sure we don't overwrite if we loop multiple times (though standard usage is 1 call = 1 chunk)
+        
+        # Retrieve the accumulated counts from the loop
+        for idx, count in policy_usage_counts.items():
+            if idx < len(main_policy.sub_policy_names):
+                p_name = main_policy.sub_policy_names[idx]
+                result[f"policy_time_{p_name}"] = float(count)
+
     results = {"results": results}
     
     if is_hierarchical:
