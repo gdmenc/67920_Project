@@ -255,6 +255,7 @@ def rollout_func(
     step_data_list = []
     meta_step_data_list = []  # For hierarchical: meta-level transitions
     results = []
+    completed_policy_durations = []  # Track length of commitment segments
     
     while step <= rollout_length:
         # Prepare policy inputs
@@ -351,6 +352,12 @@ def rollout_func(
                     # Only reset RNN state and increment counter if policy ACTUALLY changed
                     if new_sub_policy_idx != prev_sub_policy_idx:
                          episode_switch_count += 1
+                         
+                         # RECORD DURATION of the previous policy segment
+                         # steps_since_switch contains the steps executed by prev_sub_policy_idx
+                         # We record it only if it's > 0 (avoid initial zero case)
+                         if steps_since_switch > 0:
+                             completed_policy_durations.append(steps_since_switch)
                          
                          # Reset sub-policy RNN state for new policy
                          sub_actor = main_policy.sub_policies[new_sub_policy_idx]
@@ -598,6 +605,7 @@ def rollout_func(
                 accumulated_reward = 0.0
                 meta_decision_obs = None
                 episode_switch_count = 0
+                completed_policy_durations = []
     
     # Submit remaining data
     if not eval and sample_length <= 0:
