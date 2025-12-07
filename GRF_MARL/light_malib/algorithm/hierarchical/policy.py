@@ -173,6 +173,7 @@ class HierarchicalMAPPO(Policy):
         self.sub_policy_encoders = []    # Feature encoders (for re-encoding)
         self.sub_policy_obs_shapes = []  # Observation shapes
         self.sub_policy_needs_reencoding = []  # Whether re-encoding is needed
+        self.sub_policy_model_names = []  # Model identifiers for mask/encoder heuristics
         
         # Load frozen sub-policies with their encoders
         self._load_sub_policies()
@@ -233,6 +234,18 @@ class HierarchicalMAPPO(Policy):
                 # Extract feature encoder
                 sub_encoder = sub_policy.feature_encoder
                 sub_obs_shape = sub_policy.observation_space.shape
+                sub_model_name = None
+                try:
+                    # Prefer explicit model name if present on the loaded policy
+                    if getattr(sub_policy, "model_config", None):
+                        sub_model_name = sub_policy.model_config.get("model", None)
+                except Exception:
+                    sub_model_name = None
+                
+                Logger.info(
+                    f"Loaded sub-policy '{name}' model={sub_model_name}, "
+                    f"obs_shape={sub_obs_shape}"
+                )
                 
                 # Check if re-encoding is needed
                 needs_reencoding = (sub_obs_shape != self.meta_obs_shape)
@@ -243,6 +256,7 @@ class HierarchicalMAPPO(Policy):
                 self.sub_policy_encoders.append(sub_encoder)
                 self.sub_policy_obs_shapes.append(sub_obs_shape)
                 self.sub_policy_needs_reencoding.append(needs_reencoding)
+                self.sub_policy_model_names.append(sub_model_name)
                 
                 # Log encoder compatibility
                 if needs_reencoding:
@@ -559,6 +573,9 @@ class HierarchicalMAPPO(Policy):
         if needs_reencoding and raw_states is not None:
             # Re-encode raw observations using sub-policy's encoder
             sub_encoder = self.sub_policy_encoders[sub_policy_idx]
+            sub_model_name = None
+            if self.sub_policy_model_names and sub_policy_idx < len(self.sub_policy_model_names):
+                sub_model_name = self.sub_policy_model_names[sub_policy_idx]
             
             # DEBUG: Inspect raw states and re-encoding process
             # if np.random.rand() < 0.001:  # 0.1% chance to print to avoid spam
@@ -613,21 +630,37 @@ class HierarchicalMAPPO(Policy):
                 # So the first 19 elements of 'encoded_obs' ARE the action mask!
                 pass
                 
-            # If the encoder embeds the mask in the observation, we can extract it!
-            # For encoder_basic (133 dims), the first 19 dims are 'avail' mask.
-            if observations.shape[-1] == 133 or observations.shape[-1] == 115 + 19: # heuristics
-                 # Extract mask from observations
-                 # obs is [batch, 133]
-                 extracted_masks = observations[:, :19]
-                 
-                 # Update the action_masks tensor
-                 # Ensure binary (it should be 0.0 or 1.0 already)
-                 action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
-                 
-                 # START DEBUG
-                 # if np.random.rand() < 0.001:
-                 #     Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
-                 # END DEBUG
+            # CRITICAL FIX: If the encoder embeds the mask in the observation, we can extract it!
+            # For encoders that embed 'avail' as the first 19 dims, extract directly.
+            mask_model_names = {
+                "gr_football.basic",
+                "gr_football.basic_11",
+                "gr_football.enhanced_LightActionMask_5",
+                "gr_football.enhanced_LightActionMask_11",
+                "gr_football.enhanced_extended",
+                "gr_football.simple115",
+            }
+            mask_encoder_modules = {
+                "light_malib.envs.gr_football.encoders.encoder_basic",
+                "light_malib.envs.gr_football.encoders.encoder_enhanced",
+                "light_malib.envs.gr_football.encoders.encoder_simple115",
+                "light_malib.model.gr_football.enhanced_LightActionMask_5.enhanced_LightActionMask_5",
+                "light_malib.model.gr_football._legacy.enhanced_LightActionMask_11.enhanced_LightActionMask_11",
+                "light_malib.model.gr_football._legacy.enhanced_extended.enhanced_extended",
+            }
+            mask_encoder_obs_shapes = {133, 134, 192, 324}
+            encoder_module = type(sub_encoder).__module__ if sub_encoder is not None else ""
+            has_embedded_mask = (
+                (sub_model_name in mask_model_names) or
+                (encoder_module in mask_encoder_modules)
+            )
+            if has_embedded_mask or observations.shape[-1] in mask_encoder_obs_shapes:
+                extracted_masks = observations[:, :19]
+                action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
+                # START DEBUG
+                if np.random.rand() < 0.001:
+                    Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
+                # END DEBUG
             
             # Fallback if extraction failed or shape didn't match
             if action_masks is None:
