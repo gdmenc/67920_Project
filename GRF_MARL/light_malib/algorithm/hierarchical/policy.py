@@ -648,13 +648,9 @@ class HierarchicalMAPPO(Policy):
                 "light_malib.model.gr_football._legacy.enhanced_LightActionMask_11.enhanced_LightActionMask_11",
                 "light_malib.model.gr_football._legacy.enhanced_extended.enhanced_extended",
             }
-            mask_encoder_obs_shapes = {133, 134, 192, 324}
+            # mask_encoder_obs_shapes = {133, 134, 192, 324}
             encoder_module = type(sub_encoder).__module__ if sub_encoder is not None else ""
-            has_embedded_mask = (
-                (sub_model_name in mask_model_names) or
-                (encoder_module in mask_encoder_modules)
-            )
-            if has_embedded_mask or observations.shape[-1] in mask_encoder_obs_shapes:
+            if (sub_model_name in mask_model_names) or (encoder_module in mask_encoder_modules):
                 extracted_masks = observations[:, :19]
                 action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
                 # START DEBUG
@@ -672,7 +668,7 @@ class HierarchicalMAPPO(Policy):
                  if action_masks is not None and isinstance(action_masks, np.ndarray):
                      action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
                  
-                 # Logger.warning(f"Could not extract action mask for sub-policy {self.sub_policy_names[sub_policy_idx]} (obs shape {observations.shape}). Using meta-mask.")
+                 Logger.warning(f"Could not extract action mask for sub-policy {self.sub_policy_names[sub_policy_idx]} (obs shape {observations.shape}). Using meta-mask.")
 
         elif needs_reencoding and raw_states is None:
             # Need re-encoding but no raw states provided

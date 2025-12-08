@@ -174,6 +174,9 @@ def rollout_func(
             - episode_mode: 'traj' or 'time-step'
             - credit_reassign_cfg: Credit reassignment config
     """
+    # Fixed chunk size for meta-policy buffering/padding
+    META_CHUNK_SIZE = 100
+
     sample_length = kwargs.get("sample_length", rollout_length)
     render = kwargs.get("render", False)
     if render:
@@ -552,6 +555,17 @@ def rollout_func(
                 result["final_sub_policy"] = current_sub_policy_idx
                 if any_needs_reencoding:
                     result["multi_encoder_mode"] = True
+
+                # Per-episode commitment metrics
+                if len(completed_policy_durations) > 0:
+                    result["avg_commitment_length"] = float(np.mean(completed_policy_durations))
+                else:
+                    result["avg_commitment_length"] = float(steps_since_switch)
+
+                for idx, count in policy_usage_counts.items():
+                    if idx < len(main_policy.sub_policy_names):
+                        p_name = main_policy.sub_policy_names[idx]
+                        result[f"policy_time_{p_name}"] = float(count)
                 
                 # IMPORTANT: Save the final transition of the episode!
                 # Otherwise we lose the data from the last switch until the end of episode.
@@ -579,7 +593,6 @@ def rollout_func(
                 # Continuous Meta-Buffering Logic
                 # Buffer transitions until we have a fixed-size chunk.
                 # This ensures the trainer receives consistently shaped tensors (Batch, Time, ...).
-                META_CHUNK_SIZE = 100
                 
                 while len(meta_step_data_list) >= META_CHUNK_SIZE:
                     chunk_to_submit = meta_step_data_list[:META_CHUNK_SIZE]
@@ -648,31 +661,7 @@ def rollout_func(
                  submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
     
     
-    # Calculate metrics at end of episode (or rollout chunk)
-    result = results[main_agent_id] if is_hierarchical else results["total_reward"] # fallback
-    
-    if is_hierarchical:
-        # Commitment Length Metric
-        if len(completed_policy_durations) > 0:
-            result["avg_commitment_length"] = float(np.mean(completed_policy_durations))
-        else:
-            # If no switches happened and only one segment, use current duration
-            result["avg_commitment_length"] = float(steps_since_switch)
-            
-        # Policy Usage Time Metrics
-        # Tracks total steps spent in each sub-policy during this rollout
-        # We need to map indices back to names for readable logging
-        # We must aggregate this if 'results' accumulates multiple episodes
-        
-        # NOTE: rollout_func typically returns ONE episode or chunk.
-        # But we need to make sure we don't overwrite if we loop multiple times (though standard usage is 1 call = 1 chunk)
-        
-        # Retrieve the accumulated counts from the loop
-        for idx, count in policy_usage_counts.items():
-            if idx < len(main_policy.sub_policy_names):
-                p_name = main_policy.sub_policy_names[idx]
-                result[f"policy_time_{p_name}"] = float(count)
-
+    # Package results
     results = {"results": results}
     
     if is_hierarchical:
