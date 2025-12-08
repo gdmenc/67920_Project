@@ -192,6 +192,8 @@ populations:
         actor:
           network: mlp
           layers:
+            - units: 512
+              activation: ReLU
             - units: 256
               activation: ReLU
             - units: 128
@@ -201,6 +203,8 @@ populations:
         critic:
           network: mlp
           layers:
+            - units: 512
+              activation: ReLU
             - units: 256
               activation: ReLU
             - units: 128
