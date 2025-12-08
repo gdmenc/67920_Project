@@ -654,8 +654,8 @@ class HierarchicalMAPPO(Policy):
                 extracted_masks = observations[:, :19]
                 action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
                 # START DEBUG
-                if np.random.rand() < 0.001:
-                    Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
+                # if np.random.rand() < 0.001:
+                #     Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
                 # END DEBUG
             
             # Fallback if extraction failed or shape didn't match

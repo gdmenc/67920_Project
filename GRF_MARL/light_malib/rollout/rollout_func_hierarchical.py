@@ -550,12 +550,7 @@ def rollout_func(
         # Check if env ends
         if env.is_terminated():
             stats = env.get_episode_stats()
-            
-            if is_hierarchical:
-                # Add policy_switches to the main agent's stats
-                if rollout_desc.agent_id in stats:
-                    stats[rollout_desc.agent_id]['policy_switches'] = episode_switch_count
-            
+                    
             result = {
                 "main_agent_id": rollout_desc.agent_id,
                 "policy_ids": policy_ids,
@@ -608,6 +603,16 @@ def rollout_func(
                         EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
                     }
                      meta_step_data_list.append(final_transition)
+
+                # log stats
+                if is_hierarchical and rollout_desc.agent_id in stats:
+                    # Add policy_switches to the main agent's stats
+                    stats[rollout_desc.agent_id]['policy_switches'] = episode_switch_count
+                    # Add avg_commitment_length to the main agent's stats
+                    stats[rollout_desc.agent_id]['avg_commitment_length'] = result["avg_commitment_length"]
+                    for policy_name in main_policy.sub_policy_names:
+                        stats[rollout_desc.agent_id][f"policy_time_{policy_name}"] = result.get(f"policy_time_{policy_name}", 0.0)
+            
 
                 # Continuous Meta-Buffering Logic
                 # Buffer transitions until we have a fixed-size chunk.
