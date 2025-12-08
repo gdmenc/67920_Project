@@ -4,7 +4,7 @@
 expr_group: gr_football
 expr_name: global_hierarchical_meta_mlp_ppo_5_vs_5_hard
 log_dir: ./logs
-seed: 67920
+seed: 12825 #67920
 eval_only: False
 
 distributed:
@@ -73,10 +73,10 @@ rollout_manager:
         - ["node:${distributed.nodes.master.ip}",0.01]
   num_workers: 100  # half of the available cores to be safe
   seed: 12345
-  saving_interval: 10
-  batch_size: 150
-  eval_batch_size: 100
-  eval_freq: 10  
+  saving_interval: 15
+  batch_size: 200
+  eval_batch_size: 150
+  eval_freq: 5  
   rollout_metric_cfgs:
     reward:
       type: "sliding"
@@ -195,6 +195,8 @@ populations:
               activation: ReLU
             - units: 128
               activation: ReLU
+            - units: 64
+              activation: ReLU
           output:
             activation: False
         critic:
@@ -203,6 +205,8 @@ populations:
             - units: 256
               activation: ReLU
             - units: 128
+              activation: ReLU
+            - units: 64
               activation: ReLU
           output:
             activation: False
@@ -253,7 +257,7 @@ populations:
         popart_beta: 0.99999
 
         entropy_coef: 0.01  # Lowered from 0.05 to encourage exploitation after plateau
-        clip_param: 0.2
+        clip_param: 0.25
 
       policy_init_cfg:
         agent_0:
