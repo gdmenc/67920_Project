@@ -236,6 +236,7 @@ def rollout_func(
         current_sub_policy_idx = None
         steps_since_switch = 0
         accumulated_reward = 0.0
+        segment_reward_history = []  # per-step rewards in current commitment
         meta_decision_obs = None
         meta_decision_state = None
         episode_switch_count = 0  # Track number of policy switches per episode
@@ -291,12 +292,21 @@ def rollout_func(
                     # Save previous meta-transition if we had one
                     if current_sub_policy_idx is not None and meta_decision_obs is not None:
                         # Create meta-level transition with all required fields for training
+                        seg_len = steps_since_switch
+                        # Pad segment rewards to rollout_length for stacking
+                        seg_rewards_padded = np.zeros((num_players, rollout_length, 1), dtype=np.float32)
+                        if len(segment_reward_history) > 0:
+                            fill_len = min(seg_len, rollout_length)
+                            seg_rewards_padded[:, :fill_len, 0] = np.array(segment_reward_history[:fill_len], dtype=np.float32)
+                        
                         meta_transition = {
                             EpisodeKey.CUR_OBS: meta_decision_obs,
                             EpisodeKey.ACTION: np.array([current_sub_policy_idx] * num_players),
                             EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
                             EpisodeKey.DONE: policy_inputs[agent_id][EpisodeKey.DONE],
                             EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
+                            "segment_length": np.array([[steps_since_switch]] * num_players),
+                            "segment_rewards": seg_rewards_padded,
                             # Use the SAVED input RNN state from when the decision was made
                             # Broadcast to num_players to match other fields
                             EpisodeKey.ACTOR_RNN_STATE: np.repeat(
@@ -408,6 +418,7 @@ def rollout_func(
                     # Reset tracking
                     steps_since_switch = 0
                     accumulated_reward = 0.0
+                    segment_reward_history = []
                 
                 # Prepare sub-policy inputs
                 sub_policy_input = {
@@ -481,6 +492,7 @@ def rollout_func(
             # Accumulate reward for meta-policy
             reward = env_rets[main_agent_id].get(EpisodeKey.REWARD, np.zeros((num_players, 1)))
             accumulated_reward += float(np.sum(reward))
+            segment_reward_history.append(float(np.sum(reward)))
             steps_since_switch += 1
         
         # Record data after env step
@@ -576,6 +588,13 @@ def rollout_func(
                         EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
                         EpisodeKey.DONE: np.ones((num_players, 1), dtype=bool),  # Episode ended
                         EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
+                        "segment_length": np.array([[steps_since_switch]] * num_players),
+                        "segment_rewards": np.pad(
+                            np.array(segment_reward_history, dtype=np.float32)[:rollout_length],
+                            (0, max(0, rollout_length - len(segment_reward_history))),
+                            mode="constant",
+                            constant_values=0.0,
+                        ).reshape(1, -1, 1).repeat(num_players, axis=0),
                         EpisodeKey.ACTOR_RNN_STATE: np.repeat(
                             meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE), 
                             num_players, axis=0
@@ -621,6 +640,7 @@ def rollout_func(
                 current_sub_policy_idx = None
                 steps_since_switch = 0
                 accumulated_reward = 0.0
+                segment_reward_history = []
                 meta_decision_obs = None
                 episode_switch_count = 0
                 meta_decision_obs = None
