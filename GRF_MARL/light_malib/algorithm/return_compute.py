@@ -49,6 +49,7 @@ def compute_new_gae(policy, batch, use_old_V=False):
         cur_states = batch[EpisodeKey.CUR_STATE]
         cur_obs = batch[EpisodeKey.CUR_OBS]
         rnn_states = batch[EpisodeKey.CRITIC_RNN_STATE]
+        seg_lengths = batch.get("segment_length", None)
 
         assert len(rewards.shape) == 4, (rewards.shape, dones.shape)
         B, Tp1, N, _ = cur_obs.shape
@@ -82,16 +83,20 @@ def compute_new_gae(policy, batch, use_old_V=False):
         else:
             values = normalized_value
 
-        gae = 0
+        gae = torch.zeros_like(rewards[:, 0])
         advantages = torch.zeros_like(rewards)
         delta_list = torch.zeros_like(rewards)
         for t in reversed(range(Tp1 - 1)):
+            gamma_t = gamma
+            if seg_lengths is not None:
+                # seg_lengths shape: [B, T, N, 1]; use per-step discount power
+                gamma_t = gamma ** seg_lengths[:, t]
             delta = (
                 rewards[:, t]
-                + gamma * (1 - dones[:, t]) * values[:, t + 1]
+                + gamma_t * (1 - dones[:, t]) * values[:, t + 1]
                 - values[:, t]
             )
-            gae = delta + gamma * gae_lambda * (1 - dones[:, t]) * gae
+            gae = delta + gamma_t * gae_lambda * (1 - dones[:, t]) * gae
             # TODO(jh): we should differentiate terminal case and truncation case. now we directly follow env's dones
             # gae *= (1-done[t])          #terminal case
             advantages[:, t] = gae

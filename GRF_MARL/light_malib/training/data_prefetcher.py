@@ -106,7 +106,11 @@ class DataPrefetcher:
             try:
                 samples = self.stack(samples)
             except Exception as e:
-                Logger.error(f"stacking error {e}")
+                # Logger.error(f"stacking error {e}")
+                try:
+                    samples = self.concat(samples)
+                except Exception as e2:
+                    Logger.error(f"stacking error {e}, concat error {e2}")
 
             task = consumer.local_queue_put.remote(samples)
             tasks.append(task)

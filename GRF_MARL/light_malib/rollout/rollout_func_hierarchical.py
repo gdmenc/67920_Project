@@ -174,6 +174,9 @@ def rollout_func(
             - episode_mode: 'traj' or 'time-step'
             - credit_reassign_cfg: Credit reassignment config
     """
+    # Fixed chunk size for meta-policy buffering/padding
+    META_CHUNK_SIZE = 100
+
     sample_length = kwargs.get("sample_length", rollout_length)
     render = kwargs.get("render", False)
     if render:
@@ -216,7 +219,6 @@ def rollout_func(
                 f"{sum(main_policy.sub_policy_needs_reencoding)} sub-policies need re-encoding"
             )
     
-    if is_hierarchical:
         # Initialize commitment tracking
         main_policy.reset_commitment_state()
         
@@ -234,8 +236,15 @@ def rollout_func(
         current_sub_policy_idx = None
         steps_since_switch = 0
         accumulated_reward = 0.0
+        segment_reward_history = []  # per-step rewards in current commitment
         meta_decision_obs = None
         meta_decision_state = None
+        episode_switch_count = 0  # Track number of policy switches per episode
+        
+        # Meta-policy RNN states (initialized to zeros)
+        # We need to maintain these across steps for the meta-policy
+        meta_actor_rnn_state = main_policy.get_initial_state(batch_size=1)[EpisodeKey.ACTOR_RNN_STATE]
+        meta_critic_rnn_state = main_policy.get_initial_state(batch_size=1)[EpisodeKey.CRITIC_RNN_STATE]
         
         # Sub-policy RNN states (one per sub-policy, per agent)
         num_players = env.num_players[main_agent_id]
@@ -250,6 +259,8 @@ def rollout_func(
     step_data_list = []
     meta_step_data_list = []  # For hierarchical: meta-level transitions
     results = []
+    completed_policy_durations = []  # Track length of commitment segments
+    policy_usage_counts = {}  # Track total steps per policy index
     
     while step <= rollout_length:
         # Prepare policy inputs
@@ -277,55 +288,137 @@ def rollout_func(
                 )
                 
                 if should_switch:
+                    
                     # Save previous meta-transition if we had one
                     if current_sub_policy_idx is not None and meta_decision_obs is not None:
                         # Create meta-level transition with all required fields for training
+                        seg_len = steps_since_switch
+                        # Pad segment rewards to rollout_length for stacking
+                        seg_rewards_padded = np.zeros((num_players, rollout_length, 1), dtype=np.float32)
+                        if len(segment_reward_history) > 0:
+                            fill_len = min(seg_len, rollout_length)
+                            seg_rewards_padded[:, :fill_len, 0] = np.array(segment_reward_history[:fill_len], dtype=np.float32)
+                        
                         meta_transition = {
                             EpisodeKey.CUR_OBS: meta_decision_obs,
                             EpisodeKey.ACTION: np.array([current_sub_policy_idx] * num_players),
                             EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
                             EpisodeKey.DONE: policy_inputs[agent_id][EpisodeKey.DONE],
                             EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
-                            EpisodeKey.ACTOR_RNN_STATE: meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE),
-                            EpisodeKey.CRITIC_RNN_STATE: meta_decision_state.get(EpisodeKey.CRITIC_RNN_STATE),
+                            "segment_length": np.array([[steps_since_switch]] * num_players),
+                            "segment_rewards": seg_rewards_padded,
+                            # Use the SAVED input RNN state from when the decision was made
+                            # Broadcast to num_players to match other fields
+                            EpisodeKey.ACTOR_RNN_STATE: np.repeat(
+                                meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE), 
+                                num_players, axis=0
+                            ),
+                            EpisodeKey.CRITIC_RNN_STATE: np.repeat(
+                                meta_decision_state.get(EpisodeKey.CRITIC_RNN_STATE), 
+                                num_players, axis=0
+                            ),
                             # Required for PPO loss computation
                             EpisodeKey.ACTION_LOG_PROB: meta_decision_state.get(EpisodeKey.ACTION_LOG_PROB),
                             EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
                         }
                         meta_step_data_list.append(meta_transition)
                     
+                    # Prepare inputs for meta-decision
+                    # We must use the current meta-policy RNN state (input state)
+                    meta_inputs = policy_inputs[agent_id].copy()
+                    
+                    # Replicate RNN states for all players (MetaActor expects batch * num_players)
+                    # meta_actor_rnn_state is [1, layer, hidden], we need [num_players, layer, hidden]
+                    meta_inputs[EpisodeKey.ACTOR_RNN_STATE] = np.repeat(
+                        meta_actor_rnn_state, num_players, axis=0
+                    )
+                    meta_inputs[EpisodeKey.CRITIC_RNN_STATE] = np.repeat(
+                        meta_critic_rnn_state, num_players, axis=0
+                    )
+                    # meta_actor_rnn_state is [1, layer, hidden], we need [num_players, layer, hidden]
+                    meta_inputs[EpisodeKey.ACTOR_RNN_STATE] = np.repeat(
+                        meta_actor_rnn_state, num_players, axis=0
+                    )
+                    meta_inputs[EpisodeKey.CRITIC_RNN_STATE] = np.repeat(
+                        meta_critic_rnn_state, num_players, axis=0
+                    )
+                    
                     # Make new meta-decision
                     meta_output = main_policy.compute_meta_action(
                         inference=True,
                         explore=not eval,
                         to_numpy=True,
-                        **policy_inputs[agent_id]
+                        **meta_inputs
                     )
                     
                     # Get selected sub-policy (team-wide decision)
                     meta_actions = meta_output[EpisodeKey.ACTION]
-                    current_sub_policy_idx = int(meta_actions[0])  # Same for all agents
+                    new_sub_policy_idx = int(meta_actions[0])  # Same for all agents
                     
-                    # Reset sub-policy RNN state for new policy
-                    sub_actor = main_policy.sub_policies[current_sub_policy_idx]
-                    sub_policy_rnn_states[current_sub_policy_idx] = np.zeros(
-                        (num_players, sub_actor.rnn_layer_num, sub_actor.rnn_state_size),
-                        dtype=np.float32
-                    )
+                    prev_sub_policy_idx = main_policy._current_sub_policy_idx
+                    
+                    # Update policy's internal state
+                    main_policy._current_sub_policy_idx = new_sub_policy_idx
+                    
+                    # Update local variable so we can use it below
+                    current_sub_policy_idx = new_sub_policy_idx
+                    
+                    # Only reset RNN state and increment counter if policy ACTUALLY changed
+                    if new_sub_policy_idx != prev_sub_policy_idx:
+                         episode_switch_count += 1
+                         
+                         # RECORD DURATION of the previous policy segment
+                         # steps_since_switch contains the steps executed by prev_sub_policy_idx
+                         # We record it only if it's > 0 (avoid initial zero case)
+                         if steps_since_switch > 0:
+                             completed_policy_durations.append(steps_since_switch)
+                         
+                         # Reset sub-policy RNN state for new policy
+                         sub_actor = main_policy.sub_policies[new_sub_policy_idx]
+                         sub_policy_rnn_states[new_sub_policy_idx] = np.zeros(
+                             (num_players, sub_actor.rnn_layer_num, sub_actor.rnn_state_size),
+                             dtype=np.float32
+                         )
+                    else:
+                         # Keep existing RNN state (continuity)
+                         pass
                     
                     # Save meta-decision state for later (including log_prob and value for training)
+                    # IMPORTANT: Save the INPUT RNN state (single copy), not the output state
                     meta_decision_obs = policy_inputs[agent_id][EpisodeKey.CUR_OBS].copy()
                     meta_decision_state = {
                         EpisodeKey.ACTION_MASK: policy_inputs[agent_id].get(EpisodeKey.ACTION_MASK),
-                        EpisodeKey.ACTOR_RNN_STATE: meta_output.get(EpisodeKey.ACTOR_RNN_STATE),
-                        EpisodeKey.CRITIC_RNN_STATE: meta_output.get(EpisodeKey.CRITIC_RNN_STATE),
+                        EpisodeKey.ACTOR_RNN_STATE: meta_actor_rnn_state.copy(),  # Save INPUT state (single)
+                        EpisodeKey.CRITIC_RNN_STATE: meta_critic_rnn_state.copy(), # Save INPUT state (single)
                         EpisodeKey.ACTION_LOG_PROB: meta_output.get(EpisodeKey.ACTION_LOG_PROB),
                         EpisodeKey.STATE_VALUE: meta_output.get(EpisodeKey.STATE_VALUE),
                     }
                     
+                    
+                    # DEBUG LOGGING
+                    # print(f"DEBUG: Saved meta_decision_state CRITIC shape: {meta_decision_state[EpisodeKey.CRITIC_RNN_STATE].shape}")
+                    
+                    # Update meta-policy RNN state for next time
+                    # Meta output returns states for all players, but they are identical for the team
+                    # We just take the first one to maintain our single state
+                    if meta_output.get(EpisodeKey.ACTOR_RNN_STATE) is not None:
+                        # print(f"DEBUG: meta_output ACTOR shape: {meta_output[EpisodeKey.ACTOR_RNN_STATE].shape}")
+                        meta_actor_rnn_state = meta_output[EpisodeKey.ACTOR_RNN_STATE][0:1].copy()
+                        # print(f"DEBUG: Updated meta_actor_rnn_state shape: {meta_actor_rnn_state.shape}")
+                        
+                    if meta_output.get(EpisodeKey.CRITIC_RNN_STATE) is not None:
+                        # print(f"DEBUG: meta_output CRITIC shape: {meta_output[EpisodeKey.CRITIC_RNN_STATE].shape}")
+                        meta_critic_rnn_state = meta_output[EpisodeKey.CRITIC_RNN_STATE][0:1].copy()
+                        # print(f"DEBUG: Updated meta_critic_rnn_state shape: {meta_critic_rnn_state.shape}")
+                        # print(f"DEBUG: Updated meta_critic_rnn_state shape: {meta_critic_rnn_state.shape}")
+                        
+                        if meta_critic_rnn_state.shape[0] != 1:
+                             Logger.error(f"CRITICAL: meta_critic_rnn_state became shape {meta_critic_rnn_state.shape}!")
+                    
                     # Reset tracking
                     steps_since_switch = 0
                     accumulated_reward = 0.0
+                    segment_reward_history = []
                 
                 # Prepare sub-policy inputs
                 sub_policy_input = {
@@ -371,6 +464,10 @@ def rollout_func(
                 policy_outputs[agent_id]['meta_action'] = current_sub_policy_idx
                 policy_outputs[agent_id]['steps_since_switch'] = steps_since_switch
                 
+                # Update usage stats
+                if current_sub_policy_idx is not None:
+                    policy_usage_counts[current_sub_policy_idx] = policy_usage_counts.get(current_sub_policy_idx, 0) + 1
+                
             else:
                 # Standard policy (opponent or non-hierarchical)
                 policy_outputs[agent_id] = policy.compute_action(
@@ -395,6 +492,7 @@ def rollout_func(
             # Accumulate reward for meta-policy
             reward = env_rets[main_agent_id].get(EpisodeKey.REWARD, np.zeros((num_players, 1)))
             accumulated_reward += float(np.sum(reward))
+            segment_reward_history.append(float(np.sum(reward)))
             steps_since_switch += 1
         
         # Record data after env step
@@ -436,12 +534,15 @@ def rollout_func(
                     s_idx = sample_length * (submit_ctr - 1)
                     e_idx = sample_length * submit_ctr
                     
-                    submit_traj(
-                        data_server, step_data_list, step_data, rollout_desc,
-                        s_idx, e_idx,
-                        credit_reassign_cfg=kwargs.get("credit_reassign_cfg"),
-                        assist_info=assist_info
-                    )
+                    # Only submit standard data here if NOT hierarchical
+                    # Hierarchical data is handled per-episode below
+                    if not is_hierarchical:
+                        submit_traj(
+                            data_server, step_data_list, step_data, rollout_desc,
+                            s_idx, e_idx,
+                            credit_reassign_cfg=kwargs.get("credit_reassign_cfg"),
+                            assist_info=assist_info
+                        )
                     
                     if submit_ctr != submit_max_num:
                         behavior_policies = pull_policies(rollout_worker, policy_ids)
@@ -449,6 +550,7 @@ def rollout_func(
         # Check if env ends
         if env.is_terminated():
             stats = env.get_episode_stats()
+                    
             result = {
                 "main_agent_id": rollout_desc.agent_id,
                 "policy_ids": policy_ids,
@@ -460,7 +562,77 @@ def rollout_func(
                 result["final_sub_policy"] = current_sub_policy_idx
                 if any_needs_reencoding:
                     result["multi_encoder_mode"] = True
+
+                # Per-episode commitment metrics
+                if len(completed_policy_durations) > 0:
+                    result["avg_commitment_length"] = float(np.mean(completed_policy_durations))
+                else:
+                    result["avg_commitment_length"] = float(steps_since_switch)
+
+                for idx, count in policy_usage_counts.items():
+                    if idx < len(main_policy.sub_policy_names):
+                        p_name = main_policy.sub_policy_names[idx]
+                        result[f"policy_time_{p_name}"] = float(count)
                 
+                # IMPORTANT: Save the final transition of the episode!
+                # Otherwise we lose the data from the last switch until the end of episode.
+                if not eval and current_sub_policy_idx is not None and meta_decision_obs is not None:
+                     final_transition = {
+                        EpisodeKey.CUR_OBS: meta_decision_obs,
+                        EpisodeKey.ACTION: np.array([current_sub_policy_idx] * num_players),
+                        EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
+                        EpisodeKey.DONE: np.ones((num_players, 1), dtype=bool),  # Episode ended
+                        EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
+                        "segment_length": np.array([[steps_since_switch]] * num_players),
+                        "segment_rewards": np.pad(
+                            np.array(segment_reward_history, dtype=np.float32)[:rollout_length],
+                            (0, max(0, rollout_length - len(segment_reward_history))),
+                            mode="constant",
+                            constant_values=0.0,
+                        ).reshape(1, -1, 1).repeat(num_players, axis=0),
+                        EpisodeKey.ACTOR_RNN_STATE: np.repeat(
+                            meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE), 
+                            num_players, axis=0
+                        ),
+                        EpisodeKey.CRITIC_RNN_STATE: np.repeat(
+                            meta_decision_state.get(EpisodeKey.CRITIC_RNN_STATE), 
+                            num_players, axis=0
+                        ),
+                        # Required for PPO loss computation
+                        EpisodeKey.ACTION_LOG_PROB: meta_decision_state.get(EpisodeKey.ACTION_LOG_PROB),
+                        EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
+                    }
+                     meta_step_data_list.append(final_transition)
+
+                # log stats
+                if is_hierarchical and rollout_desc.agent_id in stats:
+                    # Add policy_switches to the main agent's stats
+                    stats[rollout_desc.agent_id]['policy_switches'] = episode_switch_count
+                    # Add avg_commitment_length to the main agent's stats
+                    stats[rollout_desc.agent_id]['avg_commitment_length'] = result["avg_commitment_length"]
+                    for policy_name in main_policy.sub_policy_names:
+                        stats[rollout_desc.agent_id][f"policy_time_{policy_name}"] = result.get(f"policy_time_{policy_name}", 0.0)
+            
+
+                # Continuous Meta-Buffering Logic
+                # Buffer transitions until we have a fixed-size chunk.
+                # This ensures the trainer receives consistently shaped tensors (Batch, Time, ...).
+                
+                while len(meta_step_data_list) >= META_CHUNK_SIZE:
+                    chunk_to_submit = meta_step_data_list[:META_CHUNK_SIZE]
+                    meta_step_data_list = meta_step_data_list[META_CHUNK_SIZE:]
+                    
+                    # Bootstrap using current state for the cut point
+                    meta_last_step_data = {
+                        rollout_desc.agent_id: {
+                            EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
+                            EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
+                            EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
+                            EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
+                        }
+                    }
+                    submit_traj(data_server, chunk_to_submit, meta_last_step_data, rollout_desc)
+
             results.append(result)
             
             # Reset environment
@@ -473,36 +645,48 @@ def rollout_func(
                 current_sub_policy_idx = None
                 steps_since_switch = 0
                 accumulated_reward = 0.0
+                segment_reward_history = []
                 meta_decision_obs = None
+                episode_switch_count = 0
+                meta_decision_obs = None
+                episode_switch_count = 0
+                completed_policy_durations = []
+                policy_usage_counts = {}
     
     # Submit remaining data
     if not eval and sample_length <= 0:
         if episode_mode == 'traj':
-            if is_hierarchical and len(meta_step_data_list) > 0:
-                # For hierarchical policies, submit meta-level transitions
-                # These contain meta-actions (0-3) for training the meta-policy
-                # Add final transition if we have pending meta-state
-                if current_sub_policy_idx is not None and meta_decision_obs is not None:
-                    final_transition = {
-                        EpisodeKey.CUR_OBS: meta_decision_obs,
-                        EpisodeKey.ACTION: np.array([current_sub_policy_idx] * num_players),
-                        EpisodeKey.REWARD: np.array([[accumulated_reward]] * num_players),
-                        EpisodeKey.DONE: np.ones((num_players, 1), dtype=bool),  # Episode ended
-                        EpisodeKey.ACTION_MASK: meta_decision_state.get(EpisodeKey.ACTION_MASK),
-                        EpisodeKey.ACTOR_RNN_STATE: meta_decision_state.get(EpisodeKey.ACTOR_RNN_STATE),
-                        EpisodeKey.CRITIC_RNN_STATE: meta_decision_state.get(EpisodeKey.CRITIC_RNN_STATE),
-                        # Required for PPO loss computation
-                        EpisodeKey.ACTION_LOG_PROB: meta_decision_state.get(EpisodeKey.ACTION_LOG_PROB),
-                        EpisodeKey.STATE_VALUE: meta_decision_state.get(EpisodeKey.STATE_VALUE),
-                    }
-                    meta_step_data_list.append(final_transition)
-                
-                # Submit meta-level trajectory for hierarchical policy training
-                submit_traj(data_server, meta_step_data_list, step_data, rollout_desc)
-            else:
-                # Standard (non-hierarchical) submission
+             if not is_hierarchical:
                 submit_traj(data_server, step_data_list, step_data, rollout_desc)
+             elif len(meta_step_data_list) > 0:
+                 # PAD the remainder to match META_CHUNK_SIZE
+                 # This is crucial for satisfying the (B, T, ...) shape assertion in GAE
+                 remainder_len = len(meta_step_data_list)
+                 needed = META_CHUNK_SIZE - remainder_len
+                 
+                 if needed > 0:
+                     last_valid_trans = meta_step_data_list[-1]
+                     # Create padding transition (DONE=True to mask values)
+                     padding_trans = last_valid_trans.copy()
+                     padding_trans[EpisodeKey.REWARD] = np.zeros_like(last_valid_trans[EpisodeKey.REWARD])
+                     padding_trans[EpisodeKey.DONE] = np.ones_like(last_valid_trans[EpisodeKey.DONE], dtype=bool)
+                     
+                     for _ in range(needed):
+                         meta_step_data_list.append(padding_trans)
+                 
+                 # Submit the now-full chunk
+                 meta_last_step_data = {
+                        rollout_desc.agent_id: {
+                            EpisodeKey.NEXT_OBS: step_data[rollout_desc.agent_id][EpisodeKey.NEXT_OBS],
+                            EpisodeKey.DONE: step_data[rollout_desc.agent_id][EpisodeKey.DONE],
+                            EpisodeKey.ACTOR_RNN_STATE: np.repeat(meta_actor_rnn_state, num_players, axis=0),
+                            EpisodeKey.CRITIC_RNN_STATE: np.repeat(meta_critic_rnn_state, num_players, axis=0),
+                        }
+                 }
+                 submit_traj(data_server, meta_step_data_list, meta_last_step_data, rollout_desc)
     
+    
+    # Package results
     results = {"results": results}
     
     if is_hierarchical:

@@ -110,9 +110,25 @@ class MAPPO(Policy):
             self.feature_encoder = model.FeatureEncoder()
 
         # jh: re-define observation space based on feature encoder
-        global_observation_space = self.feature_encoder.global_observation_space
-        observation_space = self.feature_encoder.observation_space
-        action_space = self.feature_encoder.action_space
+        # Robust logic: 
+        # 1. If explicit flag set to False, respect it.
+        # 2. If passed observation_space is larger than encoder's (e.g. hierarchical), respect it.
+        # 3. Otherwise, default to encoder's space (backward compatibility).
+        
+        should_overwrite = custom_config.get("use_feature_encoder_obs", True)
+        
+        # Check size heuristic
+        if hasattr(observation_space, 'shape') and hasattr(self.feature_encoder.observation_space, 'shape'):
+            if observation_space.shape[0] > self.feature_encoder.observation_space.shape[0]:
+                Logger.info(f"MAPPO: Detected larger observation space ({observation_space.shape} vs {self.feature_encoder.observation_space.shape}). Keeping provided space.")
+                should_overwrite = False
+
+        if should_overwrite:
+            global_observation_space = self.feature_encoder.global_observation_space
+            observation_space = self.feature_encoder.observation_space
+            action_space = self.feature_encoder.action_space
+        else:
+            global_observation_space = observation_space
 
         super(MAPPO, self).__init__(
             registered_name=registered_name,

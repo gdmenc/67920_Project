@@ -74,7 +74,18 @@ class HierarchicalMAPPO(Policy):
         # Feature encoder from the model
         FE_cfg = custom_config.get('FE_cfg', None)
         if FE_cfg is not None:
-            self.feature_encoder = model.FeatureEncoder(**FE_cfg)
+            # Check for custom encoder type
+            encoder_type = FE_cfg.get('encoder_type', None)
+            if encoder_type:
+                Logger.info(f"Loading custom feature encoder: {encoder_type}")
+                try:
+                    encoder_module = importlib.import_module(f"light_malib.envs.gr_football.encoders.{encoder_type}")
+                    self.feature_encoder = encoder_module.FeatureEncoder(**FE_cfg)
+                except ImportError as e:
+                    Logger.error(f"Failed to load encoder {encoder_type}: {e}")
+                    raise
+            else:
+                self.feature_encoder = model.FeatureEncoder(**FE_cfg)
         else:
             self.feature_encoder = model.FeatureEncoder()
             
@@ -97,10 +108,36 @@ class HierarchicalMAPPO(Policy):
         # Meta-policy action space = number of sub-policies
         meta_action_space = gym.spaces.Discrete(self.num_sub_policies)
         
+        # Meta-policy observation space = Concatenation of all player observations
+        # This fixes the issue where only the first player's observation was being used
+        # If using global encoder (where all obs are same), this adds redundancy but is robust
+        # If using local encoder, this essentially creates a global view from local parts
+        
+        # Extract num_players for meta-policy observation space calculation
+        if "num_agents" in custom_config:
+            self.num_players = custom_config["num_agents"]
+        elif "FE_cfg" in custom_config and "num_players" in custom_config["FE_cfg"]:
+            self.num_players = custom_config["FE_cfg"]["num_players"]
+        else:
+            self.num_players = 4 # Default fallback for this specific scenario
+            Logger.warning(f"Could not determine num_players from config, defaulting to {self.num_players}")
+
+        single_obs_shape = observation_space.shape
+        meta_obs_dim = single_obs_shape[0] * self.num_players
+        meta_observation_space = gym.spaces.Box(
+            low=observation_space.low[0], # Assuming same bounds
+            high=observation_space.high[0],
+            shape=(meta_obs_dim,),
+            dtype=observation_space.dtype
+        )
+        
+        # Disable MAPPO's default behavior of ignoring the passed observation_space
+        custom_config["use_feature_encoder_obs"] = False
+        
         super(HierarchicalMAPPO, self).__init__(
             registered_name=registered_name,
-            observation_space=observation_space,
-            action_space=meta_action_space,  # Meta-level action space
+            observation_space=meta_observation_space,  # Use concatenated space
+            action_space=meta_action_space,
             model_config=model_config,
             custom_config=custom_config,
         )
@@ -111,9 +148,10 @@ class HierarchicalMAPPO(Policy):
         self._use_cuda = custom_config.get("use_cuda", False)  # Store for later use
         
         # Create meta-policy actor and critic
+        # Use meta_observation_space (concatenated) instead of single-agent observation_space
         self.actor = model.Actor(
             self.model_config["actor"],
-            observation_space,
+            meta_observation_space,
             self.num_sub_policies,
             self.custom_config,
             self.model_config["initialization"],
@@ -121,7 +159,7 @@ class HierarchicalMAPPO(Policy):
         
         self.critic = model.Critic(
             self.model_config["critic"],
-            observation_space,
+            meta_observation_space,
             self.custom_config,
             self.model_config["initialization"],
         )
@@ -135,6 +173,7 @@ class HierarchicalMAPPO(Policy):
         self.sub_policy_encoders = []    # Feature encoders (for re-encoding)
         self.sub_policy_obs_shapes = []  # Observation shapes
         self.sub_policy_needs_reencoding = []  # Whether re-encoding is needed
+        self.sub_policy_model_names = []  # Model identifiers for mask/encoder heuristics
         
         # Load frozen sub-policies with their encoders
         self._load_sub_policies()
@@ -195,6 +234,18 @@ class HierarchicalMAPPO(Policy):
                 # Extract feature encoder
                 sub_encoder = sub_policy.feature_encoder
                 sub_obs_shape = sub_policy.observation_space.shape
+                sub_model_name = None
+                try:
+                    # Prefer explicit model name if present on the loaded policy
+                    if getattr(sub_policy, "model_config", None):
+                        sub_model_name = sub_policy.model_config.get("model", None)
+                except Exception:
+                    sub_model_name = None
+                
+                Logger.info(
+                    f"Loaded sub-policy '{name}' model={sub_model_name}, "
+                    f"obs_shape={sub_obs_shape}"
+                )
                 
                 # Check if re-encoding is needed
                 needs_reencoding = (sub_obs_shape != self.meta_obs_shape)
@@ -205,6 +256,7 @@ class HierarchicalMAPPO(Policy):
                 self.sub_policy_encoders.append(sub_encoder)
                 self.sub_policy_obs_shapes.append(sub_obs_shape)
                 self.sub_policy_needs_reencoding.append(needs_reencoding)
+                self.sub_policy_model_names.append(sub_model_name)
                 
                 # Log encoder compatibility
                 if needs_reencoding:
@@ -319,13 +371,18 @@ class HierarchicalMAPPO(Policy):
             # First step, must select a policy
             return True
             
+        # Enforce minimum commitment steps as a hard constraint
+        if steps_since_switch < self.min_commitment_steps:
+            return False
+            
         if self.commitment_mode == 'steps':
             return steps_since_switch >= self.min_commitment_steps
         elif self.commitment_mode == 'events':
             return event_occurred
         elif self.commitment_mode == 'both':
-            # Switch if EITHER condition is met (but must have min steps OR event)
-            return steps_since_switch >= self.min_commitment_steps or event_occurred
+            # Switch ONLY if BOTH conditions are met
+            # This enforces strict commitment: must wait min_steps AND wait for an event
+            return steps_since_switch >= self.min_commitment_steps and event_occurred
         else:
             # Default: always allow switching
             return True
@@ -509,12 +566,110 @@ class HierarchicalMAPPO(Policy):
         sub_actor = self.sub_policies[sub_policy_idx]
         needs_reencoding = self.sub_policy_needs_reencoding[sub_policy_idx]
         
+        # Initialize variable to avoid UnboundLocalError
+        action_masks = None
+        
         # Handle observations - re-encode if necessary
         if needs_reencoding and raw_states is not None:
             # Re-encode raw observations using sub-policy's encoder
             sub_encoder = self.sub_policy_encoders[sub_policy_idx]
+            sub_model_name = None
+            if self.sub_policy_model_names and sub_policy_idx < len(self.sub_policy_model_names):
+                sub_model_name = self.sub_policy_model_names[sub_policy_idx]
+            
+            # DEBUG: Inspect raw states and re-encoding process
+            # if np.random.rand() < 0.001:  # 0.1% chance to print to avoid spam
+            #    Logger.info(f"DEBUG: Executing sub-policy {self.sub_policy_names[sub_policy_idx]}")
+            #    Logger.info(f"DEBUG: raw_states type: {type(raw_states)}, len: {len(raw_states) if raw_states else 'None'}")
+            #    first_state = raw_states[0] if raw_states else None
+            #    if first_state:
+            #        Logger.info(f"DEBUG: first_state class: {first_state.__class__.__name__}")
+            #        Logger.info(f"DEBUG: first_state.obs keys: {first_state.obs.keys() if hasattr(first_state, 'obs') else 'No .obs'}")
+            
             encoded_obs = sub_encoder.encode(raw_states)
+            
+            # if np.random.rand() < 0.001:
+            #    Logger.info(f"DEBUG: Encoded obs shape: {np.array(encoded_obs).shape}")
+            #    Logger.info(f"DEBUG: Encoded obs sample: {np.array(encoded_obs)[0, :10]}")
+            
             observations = np.array(encoded_obs, dtype=np.float32)
+            
+            # CRITICAL FIX: Re-compute action masks using the sub-policy's encoder logic!
+            # The meta-encoder (encoder_global_enhanced) might return all-ones masks,
+            # but sub-policies (encoder_basic) rely on specific action masking logic.
+            # Using the wrong mask (e.g. all-ones) can lead to illegal actions and failure.
+            
+            # We need to construct 'his_actions' which looks like it's derived from state history
+            # But here we might just pass empty list or extract from raw state if available.
+            # Looking at encoder_basic.py:64, his_actions = state.action_list
+            
+            action_masks_list = []
+            for s in raw_states:
+                # Extract his_actions from the state object
+                his_actions = s.action_list if hasattr(s, 'action_list') else []
+                obs_dict = s.obs
+                
+                # Get ball distance from obs or compute it
+                ball_x, ball_y, _ = obs_dict["ball"]
+                # Need player position but that depends on agent index.
+                # However, encoder_basic.get_available_actions only uses 'ball_distance' arg,
+                # effectively re-calculating it or verifying it.
+                # Actually encoder_basic.get_available_actions(obs, ball_distance, his_actions)
+                
+                # We can call encoder.get_available_actions directly if we reconstruct the args
+                # Or deeper: sub_encoder.encode_each(s) actually computes 'avail' internally!
+                # If 'avail' is part of the encoded observation (which it is for encoder_basic), 
+                # we don't strictly need a separate mask IF the policy uses the mask from the observation?? 
+                # BUT MAPPO uses 'action_mask' passed separately to the actor forward pass to mask logits.
+                
+                # So we MUST generate the mask.
+                # Let's see if we can extract it from the newly encoded observation?
+                # encoder_basic puts 'avail' (19 dims) at the START of the feature vector if sorted keys are used and 'avail' is in dict.
+                # 'avail' comes first alphabetically.
+                # Let's verify 'avail' is in the state_dict in encoder_basic.py:183. Yes.
+                # So the first 19 elements of 'encoded_obs' ARE the action mask!
+                pass
+                
+            # CRITICAL FIX: If the encoder embeds the mask in the observation, we can extract it!
+            # For encoders that embed 'avail' as the first 19 dims, extract directly.
+            mask_model_names = {
+                "gr_football.basic",
+                "gr_football.basic_11",
+                "gr_football.enhanced_LightActionMask_5",
+                "gr_football.enhanced_LightActionMask_11",
+                "gr_football.enhanced_extended",
+                "gr_football.simple115",
+            }
+            mask_encoder_modules = {
+                "light_malib.envs.gr_football.encoders.encoder_basic",
+                "light_malib.envs.gr_football.encoders.encoder_enhanced",
+                "light_malib.envs.gr_football.encoders.encoder_simple115",
+                "light_malib.model.gr_football.enhanced_LightActionMask_5.enhanced_LightActionMask_5",
+                "light_malib.model.gr_football._legacy.enhanced_LightActionMask_11.enhanced_LightActionMask_11",
+                "light_malib.model.gr_football._legacy.enhanced_extended.enhanced_extended",
+            }
+            # mask_encoder_obs_shapes = {133, 134, 192, 324}
+            encoder_module = type(sub_encoder).__module__ if sub_encoder is not None else ""
+            if (sub_model_name in mask_model_names) or (encoder_module in mask_encoder_modules):
+                extracted_masks = observations[:, :19]
+                action_masks = torch.tensor(extracted_masks, device=self.device, dtype=torch.float32)
+                # START DEBUG
+                # if np.random.rand() < 0.001:
+                #     Logger.info(f"DEBUG: Re-computed mask from obs prefix. Shape: {action_masks.shape}. Mean: {action_masks.mean()}")
+                # END DEBUG
+            
+            # Fallback if extraction failed or shape didn't match
+            if action_masks is None:
+                 # If we can't extract the mask, we must assume all actions are legal to avoid crashing
+                 # This is risky but better than crashing or using the wrong mask if we really can't get it.
+                 # Better: Use the mask from kwargs if available (which is all-ones from meta-encoder)
+                 # This mimics previous behavior but warns.
+                 action_masks = kwargs.get(EpisodeKey.ACTION_MASK)
+                 if action_masks is not None and isinstance(action_masks, np.ndarray):
+                     action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
+                 
+                 Logger.warning(f"Could not extract action mask for sub-policy {self.sub_policy_names[sub_policy_idx]} (obs shape {observations.shape}). Using meta-mask.")
+
         elif needs_reencoding and raw_states is None:
             # Need re-encoding but no raw states provided
             raise ValueError(
@@ -525,8 +680,17 @@ class HierarchicalMAPPO(Policy):
         else:
             # Compatible encoder, use provided observations
             observations = kwargs[EpisodeKey.CUR_OBS]
+            
+            # Convert to tensor
+            if isinstance(observations, np.ndarray):
+                observations = torch.tensor(observations, device=self.device, dtype=torch.float32)
+                
+            # Use provided masks
+            action_masks = kwargs.get(EpisodeKey.ACTION_MASK)
+            if action_masks is not None and isinstance(action_masks, np.ndarray):
+                action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
         
-        # Convert to tensor
+        # Convert to tensor (if not already done inside re-encoding block)
         if isinstance(observations, np.ndarray):
             observations = torch.tensor(observations, device=self.device, dtype=torch.float32)
             
@@ -537,10 +701,6 @@ class HierarchicalMAPPO(Policy):
         rnn_masks = kwargs.get(EpisodeKey.DONE)
         if rnn_masks is not None and isinstance(rnn_masks, np.ndarray):
             rnn_masks = torch.tensor(rnn_masks, device=self.device, dtype=torch.float32)
-            
-        action_masks = kwargs.get(EpisodeKey.ACTION_MASK)
-        if action_masks is not None and isinstance(action_masks, np.ndarray):
-            action_masks = torch.tensor(action_masks, device=self.device, dtype=torch.float32)
         
         explore = kwargs.get("explore", False)  # Usually False for sub-policy execution
         to_numpy = kwargs.get("to_numpy", True)

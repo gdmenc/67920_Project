@@ -2,9 +2,9 @@
 # Trains a meta-policy that selects among pre-trained sub-policies
 
 expr_group: gr_football
-expr_name: hierarchical_meta_mlp_ppo_5_vs_5_hard
+expr_name: global_hierarchical_meta_mlp_ppo_5_vs_5_hard
 log_dir: ./logs
-seed: 67920
+seed: 12825 #67920
 eval_only: False
 
 distributed:
@@ -73,10 +73,10 @@ rollout_manager:
         - ["node:${distributed.nodes.master.ip}",0.01]
   num_workers: 100  # half of the available cores to be safe
   seed: 12345
-  saving_interval: 100
+  saving_interval: 15
   batch_size: 200
-  eval_batch_size: 100
-  eval_freq: 10  
+  eval_batch_size: 150
+  eval_freq: 5  
   rollout_metric_cfgs:
     reward:
       type: "sliding"
@@ -86,6 +86,10 @@ rollout_manager:
       type: "sliding"
       window_size: 20
       init_list: [0,0,0,0,0]
+    policy_switches:
+      type: "sliding"
+      window_size: 20
+      init_list: [0]
   worker:
     distributed:
       resources:
@@ -208,8 +212,10 @@ populations:
             activation: False
 
       custom_config:
+        num_agents: 4  # Required for MetaActor broadcasting (4 controlled players)
         FE_cfg:
           num_players: 10  # 5v5
+          encoder_type: "encoder_global_enhanced"
 
         # Sub-policies to choose from
         sub_policies:
@@ -224,16 +230,16 @@ populations:
 
         # Commitment configuration
         commitment:
-          mode: "steps"  # "steps", "events", or "both"
-          min_steps: 100
-          # events: ["possession_change", "game_mode_change"]
+          mode: "both"  # "steps", "events", or "both"
+          min_steps: 15 # Reduced from 25 to allow slightly faster reactions if needed
+          events: ["possession_change", "game_mode_change"]
 
         # Standard PPO hyperparameters
         gamma: 0.995
         use_cuda: False  # Rollout workers have no GPU; training uses GPU regardless
         use_q_head: False
         ppo_epoch: 20
-        num_mini_batch: 1  # Increased for training stability
+        num_mini_batch: 2  # Increased for training stability
         
         return_mode: new_gae
         gae:
@@ -250,8 +256,8 @@ populations:
         use_popart: True
         popart_beta: 0.99999
 
-        entropy_coef: 0.01  # Higher entropy for exploration of sub-policies
-        clip_param: 0.2
+        entropy_coef: 0.01  # Lowered from 0.05 to encourage exploitation after plateau
+        clip_param: 0.25
 
       policy_init_cfg:
         agent_0:
